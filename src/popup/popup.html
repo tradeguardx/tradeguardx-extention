@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Trade GuardX</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="tg-root">
+      <!-- Auth gate: shown first for new users -->
+      <section class="tg-auth" id="tg-auth" hidden>
+        <div class="tg-auth-inner">
+          <header class="tg-auth-header">
+            <img src="../../icons/logo.svg" alt="" class="tg-logo-img" />
+            <div>
+              <h1 class="tg-title">TradeGuardX</h1>
+              <p class="tg-subtitle">Sign in to sync your rules</p>
+            </div>
+          </header>
+
+          <p class="tg-auth-copy">
+            Connect your TradeGuardX account to unlock synced rules, journaling, and future analytics.
+          </p>
+
+          <div class="tg-auth-actions">
+            <button type="button" class="tg-auth-primary" id="tg-login-google">
+              <span class="tg-auth-icon">G</span>
+              Continue with Google
+            </button>
+            <button type="button" class="tg-auth-secondary" id="tg-login-email">
+              Use email / password
+            </button>
+          </div>
+
+          <p class="tg-auth-footnote">
+            You’ll be taken to <strong>tradeguardx.com</strong> to sign in securely. Once done, reopen the extension.
+          </p>
+
+          <button type="button" class="tg-auth-link" id="tg-auth-skip">
+            Skip for now
+          </button>
+        </div>
+      </section>
+
+      <!-- Main app; only visible after auth -->
+      <div id="tg-app" hidden>
+      <header class="tg-header">
+        <div class="tg-header-top">
+          <div class="tg-brand">
+            <img src="../../icons/logo.svg" alt="" class="tg-logo-img" />
+            <div>
+              <h1 class="tg-title">TradeGuardX</h1>
+              <p class="tg-subtitle">Risk protection for your trades</p>
+            </div>
+          </div>
+          <div class="tg-header-actions">
+            <button type="button" class="tg-auth-button" id="tg-auth-button">
+              <span class="tg-auth-dot"></span>
+              Sign in
+            </button>
+            <span class="tg-status-pill" id="tg-status-pill">Idle</span>
+          </div>
+        </div>
+        <div class="tg-terminal" id="tg-terminal">No active trading page detected.</div>
+      </header>
+
+      <nav class="tg-tabs" role="tablist" aria-label="Main sections">
+        <button type="button" class="tg-tab tg-tab-active" role="tab" id="tg-tab-overview" aria-selected="true" data-panel="overview">Overview</button>
+        <button type="button" class="tg-tab" role="tab" id="tg-tab-rules" aria-selected="false" data-panel="rules">Rules</button>
+        <button type="button" class="tg-tab" role="tab" id="tg-tab-trades" aria-selected="false" data-panel="trades">Trades</button>
+      </nav>
+
+      <main class="tg-main">
+        <!-- Panel: Overview -->
+        <div class="tg-panel tg-panel-active" id="tg-panel-overview" role="tabpanel" aria-labelledby="tg-tab-overview">
+          <section class="tg-section tg-section-account">
+            <h2 class="tg-section-title">
+              <span class="tg-section-dot"></span>
+              Account
+            </h2>
+            <div class="tg-metrics">
+              <div class="tg-metric">
+                <span class="tg-metric-label">Account size</span>
+                <span class="tg-metric-value" id="tg-account-size">–</span>
+              </div>
+              <div class="tg-metric">
+                <span class="tg-metric-label">Equity</span>
+                <span class="tg-metric-value" id="tg-equity">–</span>
+              </div>
+              <div class="tg-metric tg-metric-loss">
+                <span class="tg-metric-label">Floating loss</span>
+                <span class="tg-metric-value" id="tg-floating-loss">–</span>
+                <span class="tg-metric-caption" id="tg-daily-limit">–</span>
+              </div>
+              <div class="tg-metric">
+<span class="tg-metric-label" title="How much more loss is allowed today before daily limit blocks new trades">Remaining loss allowed</span>
+              <span class="tg-metric-value tg-metric-value-accent" id="tg-remaining-loss">–</span>
+              </div>
+            </div>
+            <div class="tg-progress-wrap" id="tg-progress-wrap" aria-hidden="true">
+              <div class="tg-progress-bar" id="tg-progress-bar"></div>
+            </div>
+          </section>
+
+          <section class="tg-section tg-section-session">
+            <h2 class="tg-section-title">
+              <span class="tg-section-dot"></span>
+              Today’s session
+            </h2>
+            <div class="tg-session-pills">
+              <div class="tg-pill">
+                <span class="tg-pill-label">Trades</span>
+                <span class="tg-pill-value" id="tg-trades-opened-today">0</span>
+              </div>
+              <div class="tg-pill">
+                <span class="tg-pill-label">Losses</span>
+                <span class="tg-pill-value" id="tg-session-loss-count">0</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="tg-section tg-section-overview-trade">
+            <h2 class="tg-section-title">
+              <span class="tg-section-dot"></span>
+              Open positions
+            </h2>
+            <div class="tg-overview-trade-summary" id="tg-overview-trade-summary">
+              No open positions. Check the <button type="button" class="tg-inline-link" id="tg-goto-trades">Trades</button> tab when you have a position.
+            </div>
+          </section>
+        </div>
+
+        <!-- Panel: Rules (view + configure) -->
+        <div class="tg-panel" id="tg-panel-rules" role="tabpanel" aria-labelledby="tg-tab-rules" hidden>
+          <section class="tg-section tg-section-rules">
+            <h2 class="tg-section-title">
+              <span class="tg-section-dot"></span>
+              Active rules
+            </h2>
+            <p class="tg-rules-intro">Applied when you open or close trades.</p>
+            <ul class="tg-rules-list" id="tg-rules-list"></ul>
+          </section>
+
+          <section class="tg-section tg-section-settings">
+            <h2 class="tg-section-title">
+              <span class="tg-section-dot"></span>
+              Configure rules
+            </h2>
+            <div class="tg-ai-config">
+              <div class="tg-ai-config-title">AI mapping (Claude)</div>
+              <div class="tg-ai-config-row">
+                <input
+                  type="password"
+                  id="tg-ai-api-key"
+                  class="tg-ai-input"
+                  placeholder="Paste Anthropic API key"
+                  autocomplete="off"
+                />
+                <button type="button" id="tg-ai-save-key" class="tg-ai-save-btn">Save key</button>
+              </div>
+              <div class="tg-ai-status" id="tg-ai-key-status">Key not configured</div>
+            </div>
+            <form id="tg-config-form" class="tg-config-grid">
+              <label class="tg-field tg-field-checkbox">
+                <input type="checkbox" id="tg-input-daily-loss-enabled" checked />
+                <span class="tg-field-label">Daily loss protection (block/warn when over limit)</span>
+              </label>
+              <label class="tg-field">
+                <span class="tg-field-label">Account size</span>
+                <input type="number" step="100" min="0" id="tg-input-account-size" placeholder="e.g. 50000" />
+              </label>
+              <label class="tg-field">
+                <span class="tg-field-label">Daily loss limit</span>
+                <select id="tg-input-daily-loss-type">
+                  <option value="percent">Percent (%)</option>
+                  <option value="amount">Amount ($)</option>
+                </select>
+              </label>
+              <label class="tg-field" id="tg-label-daily-loss-pct">
+                <span class="tg-field-label">Daily loss limit (%)</span>
+                <input type="number" step="0.1" min="0" id="tg-input-daily-loss" placeholder="e.g. 5" />
+              </label>
+              <label class="tg-field tg-field-hidden" id="tg-label-daily-loss-amount">
+                <span class="tg-field-label">Daily loss limit ($)</span>
+                <input type="number" step="1" min="0" id="tg-input-daily-loss-amount" placeholder="e.g. 2500" />
+              </label>
+              <label class="tg-field">
+                <span class="tg-field-label">Warning threshold (% of daily loss)</span>
+                <input type="number" step="1" min="0" max="100" id="tg-input-warning-threshold" placeholder="e.g. 80" />
+              </label>
+              <label class="tg-field tg-field-checkbox">
+                <input type="checkbox" id="tg-input-hedging-enabled" checked />
+                <span class="tg-field-label">Hedging prevention (block opposite position on same symbol)</span>
+              </label>
+
+              <div class="tg-field tg-field-full">
+                <span class="tg-field-label tg-field-label-section">Risk per trade</span>
+              </div>
+              <label class="tg-field tg-field-checkbox">
+                <input type="checkbox" id="tg-input-risk-per-trade-enabled" />
+                <span class="tg-field-label">Block trades that risk more than % of balance</span>
+              </label>
+              <label class="tg-field">
+                <span class="tg-field-label">Max risk per trade (%)</span>
+                <input type="number" step="0.1" min="0" max="100" id="tg-input-risk-per-trade-pct" placeholder="e.g. 1" />
+              </label>
+
+              <div class="tg-field tg-field-full">
+                <span class="tg-field-label tg-field-label-section">Max total loss</span>
+              </div>
+              <label class="tg-field tg-field-checkbox">
+                <input type="checkbox" id="tg-input-max-total-loss-enabled" />
+                <span class="tg-field-label">Enable max total loss (block when total loss exceeds)</span>
+              </label>
+              <label class="tg-field">
+                <span class="tg-field-label">Total loss as</span>
+                <select id="tg-input-max-total-loss-type">
+                  <option value="percent">Percent (%)</option>
+                  <option value="amount">Amount ($)</option>
+                </select>
+              </label>
+              <label class="tg-field" id="tg-label-total-loss-pct">
+                <span class="tg-field-label">Max total loss (%)</span>
+                <input type="number" step="0.1" min="0" id="tg-input-max-total-loss-pct" placeholder="e.g. 10" />
+              </label>
+              <label class="tg-field tg-field-hidden" id="tg-label-total-loss-amount">
+                <span class="tg-field-label">Max total loss ($)</span>
+                <input type="number" step="1" min="0" id="tg-input-max-total-loss-amount" placeholder="e.g. 5000" />
+              </label>
+
+              <div class="tg-field tg-field-full">
+                <span class="tg-field-label tg-field-label-section">Stacking (max open positions)</span>
+              </div>
+              <label class="tg-field tg-field-checkbox">
+                <input type="checkbox" id="tg-input-max-stacking-enabled" />
+                <span class="tg-field-label">Prompt when open positions reach</span>
+              </label>
+              <label class="tg-field">
+                <span class="tg-field-label">Max open positions</span>
+                <input type="number" step="1" min="1" id="tg-input-max-stacking-trades" placeholder="e.g. 5" />
+              </label>
+
+              <div class="tg-field tg-field-full">
+                <span class="tg-field-label tg-field-label-section">Max trades per day</span>
+              </div>
+              <label class="tg-field tg-field-checkbox">
+                <input type="checkbox" id="tg-input-max-trades-per-day-enabled" />
+                <span class="tg-field-label">Block new trades after N opens today</span>
+              </label>
+              <label class="tg-field">
+                <span class="tg-field-label">Max trades per day</span>
+                <input type="number" step="1" min="1" id="tg-input-max-trades-per-day" placeholder="e.g. 10" />
+              </label>
+
+              <div class="tg-field tg-field-full">
+                <span class="tg-field-label tg-field-label-section">Close day after N losses</span>
+              </div>
+              <label class="tg-field tg-field-checkbox">
+                <input type="checkbox" id="tg-input-close-day-enabled" />
+                <span class="tg-field-label">Block new trades after N closed losing trades today</span>
+              </label>
+              <label class="tg-field">
+                <span class="tg-field-label">Number of losses to close day</span>
+                <input type="number" step="1" min="1" id="tg-input-close-day-loss-count" placeholder="e.g. 2" />
+              </label>
+
+              <button type="submit" class="tg-button-primary">Save settings</button>
+            </form>
+          </section>
+        </div>
+
+        <!-- Panel: Trades -->
+        <div class="tg-panel" id="tg-panel-trades" role="tabpanel" aria-labelledby="tg-tab-trades" hidden>
+          <section class="tg-section tg-section-positions">
+            <h2 class="tg-section-title">
+              <span class="tg-section-dot"></span>
+              Open trades
+            </h2>
+            <p class="tg-positions-intro">Each trade shown with the same fields.</p>
+            <ul class="tg-positions-list" id="tg-positions-list"></ul>
+          </section>
+        </div>
+      </main>
+
+      <footer class="tg-footer">
+        <span class="tg-status-dot" id="tg-status-dot" aria-hidden="true"></span>
+        <span id="tg-status" class="tg-status"></span>
+        <button type="button" class="tg-footer-clear" id="tg-map-platform" title="Map positions fields on this platform">Map platform</button>
+        <button type="button" class="tg-footer-clear" id="tg-clear-state" title="Clear stored trade state and session data">Clear state</button>
+      </footer>
+      <section class="tg-debug-panel">
+        <div class="tg-debug-title">Mapping debug</div>
+        <div class="tg-debug-line" id="tg-mapping-debug-status">Host: – | Mapping: unknown</div>
+        <div class="tg-debug-actions">
+          <button type="button" class="tg-footer-clear" id="tg-remap-host" title="Force mapping overlay on current host">Remap this host</button>
+          <button type="button" class="tg-footer-clear" id="tg-show-saved-hosts" title="Show hosts saved in tradeGuardXSelectors">Show saved hosts</button>
+          <button type="button" class="tg-footer-clear" id="tg-run-mapping-diagnostics" title="Run frame-level mapping diagnostics">Run diagnostics</button>
+        </div>
+        <div class="tg-debug-line" id="tg-mapping-debug-hosts"></div>
+        <pre class="tg-debug-pre" id="tg-mapping-diagnostics-output"></pre>
+      </section>
+      </div>
+    </div>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

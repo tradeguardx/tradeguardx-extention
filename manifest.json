@@ -1,0 +1,53 @@
+{
+  "manifest_version": 3,
+  "name": "TradeGuardX",
+  "description": "Browser-based trading discipline assistant that estimates risk, warns on rule violations, and helps you respect funded-account limits. No guarantees of trade protection.",
+  "version": "1.0.0",
+  "icons": {
+    "16": "icons/logo.png",
+    "48": "icons/logo.png",
+    "128": "icons/logo.png"
+  },
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_title": "TradeGuardX",
+    "default_icon": {
+      "16": "icons/logo.png",
+      "48": "icons/logo.png",
+      "128": "icons/logo.png"
+    }
+  },
+  "background": {
+    "service_worker": "src/background/background.js",
+    "type": "module"
+  },
+  "permissions": [
+    "storage",
+    "scripting",
+    "activeTab",
+    "tabs"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "https://api.anthropic.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "src/overlay/warningOverlay.js",
+        "src/content/universalDetector.js",
+        "src/content/deep-mapper.js",
+        "src/adapters/baseAdapter.js",
+        "src/adapters/universalAdapter.js",
+        "src/content/domScanner.js",
+        "src/content/orderTableTracker.js",
+        "src/content/tradeMonitor.js",
+        "src/content/content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
