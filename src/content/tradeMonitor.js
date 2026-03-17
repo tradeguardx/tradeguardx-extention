@@ -1065,6 +1065,7 @@ class TradeMonitor {
       ui.backBtn.style.opacity = ui.backBtn.disabled ? '0.5' : '1';
       ui.pauseBtn.disabled = !captureActive;
       ui.pauseBtn.style.opacity = ui.pauseBtn.disabled ? '0.5' : '1';
+      ui.pauseBtn.style.cursor = ui.pauseBtn.disabled ? 'not-allowed' : 'pointer';
       ui.pauseBtn.textContent = capturePaused ? 'Resume' : 'Pause';
       ui.capturedEl.textContent = `Captured: ${countCapturedFields()} fields`;
       if (capturePaused) {
@@ -1207,13 +1208,42 @@ class TradeMonitor {
       highlight.style.height = `${r.height}px`;
       highlight.style.display = 'block';
     };
+    // Use a lightweight rAF throttle for highlight movement so the
+    // selector box tracks the cursor smoothly, especially on Windows.
+    let highlightRafId = null;
+    let lastMouseEvent = null;
+    let lastHighlightX = null;
+    let lastHighlightY = null;
 
-    const onMouseMove = (e) => {
+    const processHighlightMove = () => {
+      highlightRafId = null;
+      const evt = lastMouseEvent;
+      lastMouseEvent = null;
+      if (!evt) return;
       if (!this._mappingSession) return;
+      // Skip heavy highlight work while dragging the mapper bar,
+      // otherwise dragging can feel laggy/janky.
+      if (dragActive) return;
       if (!captureActive) return;
       if (capturePaused || isMinimized) return;
-      const el = document.elementFromPoint(e.clientX, e.clientY);
-      if (el && !ui.overlay.contains(el) && el !== highlight) updateHighlight(el);
+      const el = document.elementFromPoint(evt.clientX, evt.clientY);
+      if (el && !ui.overlay.contains(el) && el !== highlight) {
+        updateHighlight(el);
+      } else {
+        // When hovering near or over the mapper popup itself (overlay),
+        // hide the selector instead of leaving it stuck on an old element,
+        // which can look like it "jumps far away" from the cursor.
+        updateHighlight(null);
+      }
+      lastHighlightX = evt.clientX;
+      lastHighlightY = evt.clientY;
+    };
+
+    const onMouseMove = (e) => {
+      lastMouseEvent = e;
+      if (highlightRafId == null) {
+        highlightRafId = window.requestAnimationFrame(processHighlightMove);
+      }
     };
 
     // Draggable mapper bar (drag from top row)
@@ -1225,6 +1255,9 @@ class TradeMonitor {
 
     const onDragMove = (e) => {
       if (!dragActive) return;
+      // Prevent page text selection / native drag for smoother movement (notably on Windows)
+      e.preventDefault();
+      e.stopPropagation();
       const dx = e.clientX - dragStartX;
       const dy = e.clientY - dragStartY;
       ui.overlay.style.left = `${dragOverlayLeft + dx}px`;
@@ -1242,6 +1275,9 @@ class TradeMonitor {
 
     const onDragDown = (e) => {
       if (e.button !== 0) return;
+      // Avoid text selection and other default behaviors while starting drag
+      e.preventDefault();
+      e.stopPropagation();
       dragActive = true;
       const rect = ui.overlay.getBoundingClientRect();
       dragStartX = e.clientX;
@@ -1271,6 +1307,7 @@ class TradeMonitor {
       if (captureActive) return;
       captureActive = true;
       resetMapperLayout(ui.overlay);
+      // After starting, visually de‑emphasize Start and enable Pause
       ui.startBtn.disabled = true;
       ui.startBtn.style.opacity = '0.6';
       ui.startBtn.style.cursor = 'default';

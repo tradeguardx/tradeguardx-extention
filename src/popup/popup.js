@@ -79,22 +79,6 @@ function setStatus(text, tone = 'neutral') {
   }
 }
 
-function setAiKeyStatus(text, ok = false) {
-  const el = document.getElementById('tg-ai-key-status');
-  if (!el) return;
-  el.textContent = text;
-  el.style.color = ok ? '#4ade80' : '#94a3b8';
-}
-
-async function refreshAiKeyStatus() {
-  const res = await sendMessage({ type: 'TG_GET_ANTHROPIC_API_KEY_STATUS' });
-  if (res?.success && res.configured) {
-    setAiKeyStatus('Key configured', true);
-  } else {
-    setAiKeyStatus('Key not configured', false);
-  }
-}
-
 function renderMetrics(metrics) {
   const accountSizeEl = document.getElementById('tg-account-size');
   const equityEl = document.getElementById('tg-equity');
@@ -802,51 +786,9 @@ function setupConfigForm() {
   });
 }
 
-async function getAuthToken() {
-  try {
-    const result = await chrome.storage.local.get(['tgAuthToken']);
-    return result.tgAuthToken || null;
-  } catch (_e) {
-    return null;
-  }
-}
-
-async function setAuthToken(token) {
-  await chrome.storage.local.set({ tgAuthToken: token });
-}
-
-function toggleAuthViews(isAuthed) {
-  const authEl = document.getElementById('tg-auth');
-  const appEl = document.getElementById('tg-app');
-  if (authEl) authEl.hidden = !!isAuthed;
-  if (appEl) appEl.hidden = !isAuthed;
-}
-
 function initApp() {
   setupTabs();
   setupConfigForm();
-  const aiKeyInput = document.getElementById('tg-ai-api-key');
-  const aiSaveBtn = document.getElementById('tg-ai-save-key');
-  if (aiSaveBtn && aiKeyInput) {
-    aiSaveBtn.addEventListener('click', async () => {
-      const key = aiKeyInput.value?.trim();
-      if (!key) {
-        setStatus('Enter API key first', 'error');
-        setAiKeyStatus('Key not configured', false);
-        return;
-      }
-      setStatus('Saving API key…', 'neutral');
-      const res = await sendMessage({ type: 'TG_SET_ANTHROPIC_API_KEY', payload: { apiKey: key } });
-      if (!res?.success) {
-        setStatus(res?.error || 'Failed to save API key', 'error');
-        setAiKeyStatus('Key save failed', false);
-        return;
-      }
-      aiKeyInput.value = '';
-      setStatus('API key saved', 'neutral');
-      setAiKeyStatus('Key configured', true);
-    });
-  }
   const mapBtn = document.getElementById('tg-map-platform');
   if (mapBtn) {
     mapBtn.addEventListener('click', async () => {
@@ -911,57 +853,14 @@ function initApp() {
   }
   loadState();
   refreshMappingDebugStatus();
-  refreshAiKeyStatus();
   setInterval(() => {
     loadState(true);
     refreshMappingDebugStatus();
   }, 2000);
 }
 
-document.addEventListener('DOMContentLoaded', async () => {
-  const token = await getAuthToken();
-  const isAuthed = !!token;
-  toggleAuthViews(isAuthed);
-
-  const loginGoogleBtn = document.getElementById('tg-login-google');
-  if (loginGoogleBtn) {
-    loginGoogleBtn.addEventListener('click', () => {
-      chrome.tabs.create({
-        url: 'https://tradeguardx.com/login?provider=google&source=extension'
-      });
-    });
-  }
-
-  const loginEmailBtn = document.getElementById('tg-login-email');
-  if (loginEmailBtn) {
-    loginEmailBtn.addEventListener('click', () => {
-      chrome.tabs.create({
-        url: 'https://tradeguardx.com/login?source=extension'
-      });
-    });
-  }
-
-  const skipBtn = document.getElementById('tg-auth-skip');
-  if (skipBtn) {
-    skipBtn.addEventListener('click', async () => {
-      // For now, store a placeholder token so user can explore the UI.
-      await setAuthToken('dev-placeholder-token');
-      toggleAuthViews(true);
-      initApp();
-    });
-  }
-
-  const headerAuthBtn = document.getElementById('tg-auth-button');
-  if (headerAuthBtn) {
-    headerAuthBtn.addEventListener('click', () => {
-      chrome.tabs.create({
-        url: 'https://tradeguardx.com/login?source=extension'
-      });
-    });
-  }
-
-  if (isAuthed) {
-    initApp();
-  }
+document.addEventListener('DOMContentLoaded', () => {
+  // Auth is disabled for now; always show the main app.
+  initApp();
 });
 

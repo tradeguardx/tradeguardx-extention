@@ -7,43 +7,8 @@
   </head>
   <body>
     <div class="tg-root">
-      <!-- Auth gate: shown first for new users -->
-      <section class="tg-auth" id="tg-auth" hidden>
-        <div class="tg-auth-inner">
-          <header class="tg-auth-header">
-            <img src="../../icons/logo.svg" alt="" class="tg-logo-img" />
-            <div>
-              <h1 class="tg-title">TradeGuardX</h1>
-              <p class="tg-subtitle">Sign in to sync your rules</p>
-            </div>
-          </header>
-
-          <p class="tg-auth-copy">
-            Connect your TradeGuardX account to unlock synced rules, journaling, and future analytics.
-          </p>
-
-          <div class="tg-auth-actions">
-            <button type="button" class="tg-auth-primary" id="tg-login-google">
-              <span class="tg-auth-icon">G</span>
-              Continue with Google
-            </button>
-            <button type="button" class="tg-auth-secondary" id="tg-login-email">
-              Use email / password
-            </button>
-          </div>
-
-          <p class="tg-auth-footnote">
-            You’ll be taken to <strong>tradeguardx.com</strong> to sign in securely. Once done, reopen the extension.
-          </p>
-
-          <button type="button" class="tg-auth-link" id="tg-auth-skip">
-            Skip for now
-          </button>
-        </div>
-      </section>
-
-      <!-- Main app; only visible after auth -->
-      <div id="tg-app" hidden>
+      <!-- Main app (auth temporarily disabled) -->
+      <div id="tg-app">
       <header class="tg-header">
         <div class="tg-header-top">
           <div class="tg-brand">
@@ -54,10 +19,6 @@
             </div>
           </div>
           <div class="tg-header-actions">
-            <button type="button" class="tg-auth-button" id="tg-auth-button">
-              <span class="tg-auth-dot"></span>
-              Sign in
-            </button>
             <span class="tg-status-pill" id="tg-status-pill">Idle</span>
           </div>
         </div>
@@ -146,20 +107,6 @@
               <span class="tg-section-dot"></span>
               Configure rules
             </h2>
-            <div class="tg-ai-config">
-              <div class="tg-ai-config-title">AI mapping (Claude)</div>
-              <div class="tg-ai-config-row">
-                <input
-                  type="password"
-                  id="tg-ai-api-key"
-                  class="tg-ai-input"
-                  placeholder="Paste Anthropic API key"
-                  autocomplete="off"
-                />
-                <button type="button" id="tg-ai-save-key" class="tg-ai-save-btn">Save key</button>
-              </div>
-              <div class="tg-ai-status" id="tg-ai-key-status">Key not configured</div>
-            </div>
             <form id="tg-config-form" class="tg-config-grid">
               <label class="tg-field tg-field-checkbox">
                 <input type="checkbox" id="tg-input-daily-loss-enabled" checked />
