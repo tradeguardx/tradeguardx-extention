@@ -1,1021 +1,1288 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   TradeGuardX Popup · Visual redesign v2
+   — One number. One color. One decision. —
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Reset + tokens ─────────────────────────────────────────────────────── */
 *,
 *::before,
 *::after {
   box-sizing: border-box;
 }
 
-body {
-  margin: 0;
-  padding: 0;
-  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background: #0b0f1a;
-  color: #e2e8f0;
-  font-size: 13px;
+:root {
+  --bg: #0b0d10;
+  --surface: #13161b;
+  --surface-2: #1a1e25;
+  --surface-hi: #20252d;
+  --border: rgba(255, 255, 255, 0.06);
+  --border-2: rgba(255, 255, 255, 0.1);
+  --border-hi: rgba(255, 255, 255, 0.14);
+  --text: #e8eaee;
+  --text-2: #9098a4;
+  --text-3: #5a6370;
+  --text-4: #3d444d;
+  --green: #4ade80;
+  --green-bg: rgba(74, 222, 128, 0.1);
+  --green-border: rgba(74, 222, 128, 0.22);
+  --amber: #f59e0b;
+  --amber-bg: rgba(245, 158, 11, 0.1);
+  --amber-border: rgba(245, 158, 11, 0.22);
+  --red: #ef4444;
+  --red-bg: rgba(239, 68, 68, 0.1);
+  --red-border: rgba(239, 68, 68, 0.22);
+  --blue: #60a5fa;
+  --font-ui: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-num: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --font-hero: 'Fraunces', Georgia, serif;
+  --r-sm: 4px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+  --r-pill: 999px;
 }
 
+html,
+body {
+  width: 380px !important;
+  height: 600px !important;
+  max-height: 600px !important;
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  overflow: hidden !important;
+}
+
+body {
+  font-family: var(--font-ui);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+}
+
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* ── Root popup shell ───────────────────────────────────────────────────── */
 .tg-root {
   width: 380px;
-  min-height: 420px;
-  max-height: 560px;
+  height: 600px;
   display: flex;
   flex-direction: column;
-  background: linear-gradient(180deg, #0f172a 0%, #020617 100%);
-  border: 1px solid rgba(148, 163, 184, 0.12);
-}
-
-/* ----- Auth gate ----- */
-.tg-auth {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 16px;
-}
-
-.tg-auth-inner {
-  width: 100%;
-  border-radius: 16px;
-  padding: 18px 16px 14px;
-  background: radial-gradient(circle at top, rgba(45, 212, 191, 0.16), transparent 60%), #020617;
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.8);
-}
-
-.tg-auth-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.tg-auth-copy {
-  margin: 0 0 12px;
-  font-size: 12px;
-  color: #cbd5f5;
-}
-
-.tg-auth-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.tg-auth-primary,
-.tg-auth-secondary {
-  width: 100%;
-  border-radius: 999px;
-  padding: 8px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  border: 1px solid transparent;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-}
-
-.tg-auth-primary {
-  background: linear-gradient(135deg, #22c55e, #0ea5e9);
-  color: #020617;
-}
-
-.tg-auth-primary:hover {
-  filter: brightness(1.05);
-}
-
-.tg-auth-secondary {
-  background: rgba(15, 23, 42, 0.9);
-  border-color: rgba(148, 163, 184, 0.4);
-  color: #e2e8f0;
-}
-
-.tg-auth-secondary:hover {
-  border-color: rgba(45, 212, 191, 0.6);
-}
-
-.tg-auth-icon {
-  width: 18px;
-  height: 18px;
-  border-radius: 999px;
-  background: #020617;
-  color: #f9fafb;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.tg-auth-footnote {
-  margin: 4px 0 8px;
-  font-size: 11px;
-  color: #9ca3af;
-}
-
-.tg-auth-link {
-  border: none;
-  background: none;
-  padding: 0;
-  font-size: 11px;
-  color: #6ee7b7;
-  cursor: pointer;
-  text-decoration: underline;
-}
-
-/* ----- Header ----- */
-.tg-header {
-  flex-shrink: 0;
-  padding: 14px 16px 12px;
-  background: rgba(15, 23, 42, 0.85);
-  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
-}
-
-.tg-header-top {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.tg-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.tg-auth-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  background: rgba(15, 23, 42, 0.9);
-  color: #e2e8f0;
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-}
-
-.tg-auth-button:hover {
-  background: rgba(15, 23, 42, 1);
-  border-color: rgba(45, 212, 191, 0.7);
-  color: #a5f3fc;
-}
-
-.tg-auth-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: #22c55e;
-  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.25);
-}
-
-.tg-brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.tg-logo-img {
-  width: 36px;
-  height: 36px;
-  object-fit: contain;
-  flex-shrink: 0;
-}
-
-.tg-logo-fallback-hidden {
-  display: none !important;
-}
-
-.tg-logo {
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, #22c55e 0%, #14b8a6 100%);
-  color: #022c22;
-  font-size: 16px;
-  font-weight: 700;
-  border-radius: 10px;
-  flex-shrink: 0;
-}
-
-.tg-title {
-  margin: 0;
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: #f1f5f9;
-}
-
-.tg-subtitle {
-  margin: 2px 0 0;
-  font-size: 11px;
-  color: #94a3b8;
-  font-weight: 500;
-}
-
-.tg-status-pill {
-  flex-shrink: 0;
-  padding: 4px 10px;
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  border-radius: 999px;
-  background: rgba(148, 163, 184, 0.2);
-  color: #94a3b8;
-}
-
-.tg-status-pill.tg-status-pill-active {
-  background: rgba(34, 197, 94, 0.2);
-  color: #4ade80;
-}
-
-.tg-terminal {
-  margin-top: 10px;
-  padding: 6px 10px;
-  font-size: 11px;
-  color: #64748b;
-  background: rgba(15, 23, 42, 0.6);
-  border-radius: 6px;
-  border: 1px solid rgba(148, 163, 184, 0.08);
-}
-
-.tg-terminal.tg-terminal-connected {
-  color: #a5b4fc;
-  border-color: rgba(165, 180, 252, 0.2);
-}
-
-/* ----- Tab navigation ----- */
-.tg-tabs {
-  flex-shrink: 0;
-  display: flex;
-  padding: 0 16px;
-  gap: 2px;
-  background: rgba(15, 23, 42, 0.6);
-  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
-}
-
-.tg-tab {
-  padding: 10px 14px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #94a3b8;
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
-  margin-bottom: -1px;
-}
-
-.tg-tab:hover {
-  color: #cbd5e1;
-}
-
-.tg-tab.tg-tab-active {
-  color: #22c55e;
-  border-bottom-color: #22c55e;
-}
-
-/* ----- Main (scrollable) ----- */
-.tg-main {
-  flex: 1;
-  overflow-y: auto;
-  padding: 10px 16px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  position: relative;
-}
-
-.tg-panel {
-  display: none;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.tg-panel.tg-panel-active {
-  display: flex;
-}
-
-/* ----- Overview trade summary ----- */
-.tg-overview-trade-summary {
-  font-size: 12px;
-  color: #94a3b8;
-  line-height: 1.5;
-}
-
-.tg-overview-trade-summary.tg-has-positions {
-  color: #e2e8f0;
-}
-
-.tg-inline-link {
-  background: none;
-  border: none;
-  padding: 0;
-  font-size: inherit;
-  color: #22c55e;
-  text-decoration: underline;
-  cursor: pointer;
-}
-
-.tg-inline-link:hover {
-  color: #4ade80;
-}
-
-/* ----- Positions list (Trades panel) ----- */
-.tg-positions-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.tg-position-card {
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: rgba(2, 6, 23, 0.5);
-  border: 1px solid rgba(148, 163, 184, 0.1);
-  font-size: 12px;
-}
-
-.tg-position-card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 6px;
-}
-
-.tg-position-card-symbol {
-  font-weight: 700;
-  color: #f1f5f9;
-}
-
-.tg-position-card-side {
-  font-size: 10px;
-  font-weight: 600;
-  padding: 2px 6px;
-  border-radius: 4px;
-}
-
-.tg-position-card-side.tg-side-buy {
-  background: rgba(34, 197, 94, 0.2);
-  color: #4ade80;
-}
-
-.tg-position-card-side.tg-side-sell {
-  background: rgba(239, 68, 68, 0.2);
-  color: #fca5a5;
-}
-
-.tg-position-card-details {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 4px 12px;
-  font-size: 11px;
-  color: #94a3b8;
-}
-
-.tg-position-card-details span:nth-child(odd) {
-  color: #64748b;
-}
-
-.tg-positions-intro {
-  margin: 0 0 10px;
-  font-size: 11px;
-  color: #94a3b8;
-}
-
-.tg-position-card-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 0 10px;
-  margin: 0;
-  font: inherit;
-  font-size: 11px;
-  font-weight: 600;
-  color: #cbd5e1;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  text-align: left;
-  background: none;
-  border: none;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
-  cursor: pointer;
-  -webkit-appearance: none;
-  appearance: none;
-}
-
-.tg-position-card-toggle:hover {
-  color: #f1f5f9;
-}
-
-.tg-position-card-toggle:focus-visible {
-  outline: 2px solid rgba(34, 197, 94, 0.6);
-  outline-offset: 2px;
-  border-radius: 4px;
-}
-
-.tg-position-card-toggle-label {
-  color: #64748b;
-}
-
-.tg-position-card-toggle-summary {
-  flex: 1;
-  color: #94a3b8;
-  font-weight: 500;
-  text-transform: none;
-  letter-spacing: 0;
-}
-
-.tg-position-card-chevron {
-  display: inline-block;
-  width: 0;
-  height: 0;
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  border-top: 5px solid #94a3b8;
-  margin-left: 4px;
-  transition: transform 0.2s ease;
-}
-
-.tg-position-card-toggle[aria-expanded="true"] .tg-position-card-chevron {
-  transform: rotate(180deg);
-}
-
-.tg-position-card-body {
-  padding-top: 6px;
-}
-
-.tg-position-card-collapsed .tg-position-card-body {
-  display: none;
-}
-
-.tg-position-card-full {
-  margin-bottom: 12px;
-}
-
-.tg-position-card-full:last-child {
-  margin-bottom: 0;
-}
-
-.tg-position-card-full .tg-current-trade {
-  margin-bottom: 0;
-}
-
-.tg-position-card-empty {
-  color: #94a3b8;
-  font-size: 12px;
-  text-align: center;
-  padding: 16px;
-}
-
-.tg-trade-risk-over {
-  color: #fca5a5;
-  font-weight: 600;
-}
-
-.tg-main::-webkit-scrollbar {
-  width: 6px;
-}
-
-.tg-main::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.tg-main::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.25);
-  border-radius: 3px;
-}
-
-/* ----- Sections ----- */
-.tg-section {
-  background: rgba(15, 23, 42, 0.7);
-  border-radius: 12px;
-  padding: 12px 14px;
-  border: 1px solid rgba(148, 163, 184, 0.1);
-}
-
-.tg-section-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 10px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #cbd5e1;
-}
-
-.tg-section-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #22c55e;
-  opacity: 0.9;
-}
-
-/* ----- Account metrics ----- */
-.tg-metrics {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 8px;
-}
-
-.tg-metric {
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: rgba(2, 6, 23, 0.5);
-  border: 1px solid rgba(148, 163, 184, 0.08);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.tg-metric-label {
-  font-size: 10px;
-  font-weight: 500;
-  color: #94a3b8;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
-.tg-metric-value {
-  font-size: 14px;
-  font-weight: 700;
-  color: #f1f5f9;
-  letter-spacing: -0.02em;
-}
-
-.tg-metric-value-accent {
-  color: #4ade80;
-}
-
-.tg-metric-loss .tg-metric-value {
-  color: #fca5a5;
-}
-
-.tg-metric-caption {
-  font-size: 10px;
-  color: #64748b;
-  margin-top: 1px;
-}
-
-.tg-progress-wrap {
-  margin-top: 10px;
-  height: 4px;
-  background: rgba(148, 163, 184, 0.15);
-  border-radius: 2px;
+  background: var(--bg);
   overflow: hidden;
 }
 
-.tg-progress-bar {
-  height: 100%;
-  width: 0%;
-  max-width: 100%;
-  background: linear-gradient(90deg, #22c55e, #facc15);
-  border-radius: 2px;
-  transition: width 0.25s ease;
-}
-
-.tg-progress-wrap.tg-progress-warn .tg-progress-bar {
-  background: linear-gradient(90deg, #facc15, #f97316);
-}
-
-.tg-progress-wrap.tg-progress-danger .tg-progress-bar {
-  background: #ef4444;
-}
-
-/* ----- Current trade ----- */
-.tg-current-trade {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 10px;
-}
-
-.tg-trade-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 12px;
-  padding: 4px 0;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.06);
-}
-
-.tg-trade-row:last-of-type {
-  border-bottom: none;
-}
-
-.tg-trade-row-pnl .tg-trade-value {
-  font-weight: 700;
-}
-
-.tg-trade-row-pnl.tg-trade-profit .tg-trade-value {
-  color: #4ade80;
-}
-
-.tg-trade-row-pnl.tg-trade-loss .tg-trade-value {
-  color: #fca5a5;
-}
-
-.tg-trade-label {
-  color: #94a3b8;
-  font-size: 11px;
-}
-
-.tg-trade-value {
-  font-weight: 600;
-  color: #e2e8f0;
-}
-
-.tg-trade-rules {
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(148, 163, 184, 0.08);
-}
-
-.tg-trade-rules-title {
-  font-size: 10px;
-  font-weight: 600;
-  color: #94a3b8;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  margin-bottom: 6px;
-}
-
-.tg-trade-rules-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.tg-trade-rule {
-  font-size: 11px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 4px 6px;
-  border-radius: 4px;
-  background: rgba(2, 6, 23, 0.3);
-}
-
-.tg-trade-rule-name {
-  color: #94a3b8;
-}
-
-.tg-trade-rule-status-ok {
-  color: #4ade80;
-  font-weight: 600;
-}
-
-.tg-trade-rule-status-warn {
-  color: #facc15;
-  font-weight: 600;
-}
-
-.tg-trade-rule-status-bad {
-  color: #f97373;
-  font-weight: 600;
-}
-
-.tg-trade-risk-over {
-  color: #f97373;
-  font-weight: 600;
-}
-
-/* ----- Session pills ----- */
-.tg-session-pills {
-  display: flex;
-  gap: 10px;
-}
-
-.tg-pill {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 10px 12px;
-  background: rgba(2, 6, 23, 0.5);
-  border-radius: 10px;
-  border: 1px solid rgba(148, 163, 184, 0.08);
-}
-
-.tg-pill-label {
-  font-size: 10px;
-  font-weight: 500;
-  color: #94a3b8;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
-.tg-pill-value {
-  font-size: 18px;
-  font-weight: 700;
-  color: #f1f5f9;
-}
-
-/* ----- Rules list ----- */
-.tg-rules-intro {
-  font-size: 11px;
-  color: #94a3b8;
-  margin: 0 0 8px;
-  line-height: 1.4;
-}
-
-.tg-rules-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.tg-rule-item {
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: rgba(2, 6, 23, 0.4);
-  border: 1px solid rgba(148, 163, 184, 0.1);
-}
-
-.tg-rule-item-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: #e2e8f0;
-  margin-bottom: 3px;
-}
-
-.tg-rule-item-desc {
-  font-size: 10px;
-  color: #94a3b8;
-  margin-bottom: 4px;
-  line-height: 1.35;
-}
-
-.tg-rule-item-value {
-  font-size: 11px;
-  color: #a5b4fc;
-  font-weight: 500;
-}
-
-
-.tg-config-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 10px;
-}
-
-.tg-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.tg-field-checkbox {
-  flex-direction: row;
-  align-items: center;
-  gap: 10px;
-  grid-column: 1 / -1;
-}
-
-.tg-field-checkbox input[type='checkbox'] {
-  width: 18px;
-  height: 18px;
-  accent-color: #22c55e;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.tg-field-checkbox .tg-field-label {
-  flex: 1;
-  font-size: 11px;
-}
-
-.tg-field-label {
-  font-size: 10px;
-  font-weight: 500;
-  color: #94a3b8;
-}
-
-.tg-field-full {
-  grid-column: 1 / -1;
-}
-
+/* Utility: hide (popup.js toggles this) */
 .tg-field-hidden {
   display: none !important;
 }
 
-.tg-field-label-section {
-  font-size: 11px;
-  font-weight: 600;
-  color: #64748b;
-  margin-top: 8px;
-  padding-bottom: 4px;
-}
-
-.tg-field input[type='number'],
-.tg-field select {
-  padding: 8px 10px;
-  font-size: 12px;
-  background: rgba(2, 6, 23, 0.6);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 8px;
-  color: #e2e8f0;
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-
-.tg-field input[type='number']:focus-visible,
-.tg-field select:focus-visible {
-  outline: none;
-  border-color: #22c55e;
-  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.2);
-}
-
-.tg-field select {
-  cursor: pointer;
-}
-
-.tg-ai-config {
-  margin: 2px 0 12px;
-  padding: 10px;
-  border-radius: 8px;
-  background: rgba(2, 6, 23, 0.5);
-  border: 1px solid rgba(148, 163, 184, 0.12);
-}
-
-.tg-ai-config-title {
-  font-size: 11px;
-  font-weight: 600;
-  color: #cbd5e1;
-  margin-bottom: 8px;
-}
-
-.tg-ai-config-row {
-  display: flex;
-  gap: 8px;
-}
-
-.tg-ai-input {
-  flex: 1;
-  min-width: 0;
-  padding: 8px 10px;
-  font-size: 12px;
-  background: rgba(2, 6, 23, 0.6);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 8px;
-  color: #e2e8f0;
-}
-
-.tg-ai-input:focus-visible {
-  outline: none;
-  border-color: #22c55e;
-  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.2);
-}
-
-.tg-ai-save-btn {
-  padding: 8px 10px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #022c22;
-  background: linear-gradient(135deg, #22c55e 0%, #14b8a6 100%);
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-}
-
-.tg-ai-status {
-  margin-top: 6px;
-  font-size: 11px;
-  color: #94a3b8;
-}
-
-.tg-button-primary {
-  grid-column: 1 / -1;
-  margin-top: 8px;
-  padding: 10px 16px;
-  font-size: 13px;
-  font-weight: 600;
-  color: #022c22;
-  background: linear-gradient(135deg, #22c55e 0%, #14b8a6 100%);
-  border: none;
-  border-radius: 10px;
-  cursor: pointer;
-  transition: filter 0.15s, transform 0.05s;
-}
-
-.tg-button-primary:hover {
-  filter: brightness(1.08);
-}
-
-.tg-button-primary:active {
-  transform: scale(0.98);
-}
-
-/* ----- Footer ----- */
-.tg-footer {
-  flex-shrink: 0;
+/* ══════════════════════════════════════════════════════════════════════════
+   BRAND
+   ══════════════════════════════════════════════════════════════════════════ */
+.tg-brand {
   display: flex;
   align-items: center;
+  gap: 12px;
+  margin-bottom: 28px;
+}
+.tg-brand-sm {
+  margin-bottom: 0;
+  gap: 10px;
+}
+.tg-logo-wrap {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(74, 222, 128, 0.18), rgba(74, 222, 128, 0.04));
+  border: 1px solid rgba(74, 222, 128, 0.3);
+  overflow: hidden;
+}
+.tg-logo-wrap-sm {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+}
+.tg-logo-img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+.tg-logo-wrap-sm .tg-logo-img {
+  width: 16px;
+  height: 16px;
+}
+.tg-brand-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+.tg-brand-name em {
+  color: var(--green);
+  font-style: normal;
+}
+.tg-brand-name-sm {
+  font-size: 13px;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PAIRING GATE
+   ══════════════════════════════════════════════════════════════════════════ */
+.tg-pairing-gate {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 28px 24px;
+  background:
+    radial-gradient(800px 200px at 50% 0%, rgba(74, 222, 128, 0.06), transparent 60%),
+    var(--bg);
+}
+.tg-pairing-card {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.tg-pair-title {
+  font-family: var(--font-hero);
+  font-weight: 500;
+  font-size: 22px;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  margin: 0 0 8px;
+  color: var(--text);
+}
+.tg-pair-sub {
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0 0 20px;
+}
+.tg-pair-steps {
+  margin: 0 0 20px;
+  padding: 16px 16px 16px 32px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+.tg-pair-steps li {
+  padding-left: 4px;
+}
+.tg-pair-steps li + li {
+  margin-top: 2px;
+}
+.tg-pair-steps b {
+  color: var(--text);
+  font-weight: 500;
+}
+.tg-pair-label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-2);
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+.tg-pair-input {
+  width: 100%;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  color: var(--text);
+  font-family: var(--font-num);
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: border-color 0.15s;
+  margin-bottom: 12px;
+}
+.tg-pair-input::placeholder {
+  color: var(--text-4);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.tg-pair-input:focus {
+  outline: none;
+  border-color: var(--text-2);
+}
+.tg-pair-hint {
+  font-size: 11.5px;
+  color: var(--text-3);
+  text-align: center;
+  margin: 10px 0 0;
+}
+.tg-pair-error {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--red-bg);
+  border: 1px solid var(--red-border);
+  border-radius: var(--r-md);
+  color: #fca5a5;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   BUTTONS + LINKS
+   ══════════════════════════════════════════════════════════════════════════ */
+.tg-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   gap: 8px;
-  padding: 8px 16px 12px;
-  background: rgba(15, 23, 42, 0.6);
-  border-top: 1px solid rgba(148, 163, 184, 0.08);
-}
-
-.tg-footer-clear {
-  margin-left: auto;
-  padding: 4px 8px;
-  font-size: 11px;
-  color: var(--tg-muted, #64748b);
-  background: transparent;
-  border: none;
-  border-radius: 4px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+.tg-btn:hover {
+  background: var(--surface-2);
+  border-color: var(--border-hi);
+}
+.tg-btn:active {
+  transform: scale(0.985);
+}
+.tg-btn:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
+}
+.tg-btn-primary {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--bg);
+  font-weight: 600;
+}
+.tg-btn-primary:hover {
+  background: #fff;
+  border-color: #fff;
+}
+.tg-btn-block {
+  width: 100%;
+  padding: 12px 16px;
+  font-size: 13.5px;
 }
 
-.tg-footer-clear:hover {
-  color: var(--tg-text, #e2e8f0);
-  background: rgba(148, 163, 184, 0.12);
+.tg-link {
+  background: none;
+  border: none;
+  padding: 4px 8px;
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  color: var(--text-3);
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  transition: color 0.15s, background 0.15s;
+  text-decoration: none;
+}
+.tg-link:hover {
+  color: var(--text);
+  background: var(--surface);
+}
+.tg-link-danger {
+  color: #f87171;
+}
+.tg-link-danger:hover {
+  color: #fca5a5;
+  background: var(--red-bg);
+}
+.tg-inline-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--blue);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: rgba(96, 165, 250, 0.3);
+  text-underline-offset: 2px;
+}
+.tg-inline-link:hover {
+  text-decoration-color: var(--blue);
 }
 
-.tg-status-dot {
+/* ══════════════════════════════════════════════════════════════════════════
+   APP (container wrapping header + main + footer, sibling of pairing gate)
+   Target by id because popup.js toggles only the hidden class, leaving the
+   element with no class attribute once paired.
+   ══════════════════════════════════════════════════════════════════════════ */
+#tg-app {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   HEADER
+   ══════════════════════════════════════════════════════════════════════════ */
+.tg-header {
+  flex: 0 0 auto;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.tg-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.tg-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px 5px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-2);
+  letter-spacing: 0.01em;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+.tg-status-pill::before {
+  content: '';
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #64748b;
+  background: var(--text-3);
+  flex-shrink: 0;
+}
+.tg-status-pill-active {
+  color: var(--green);
+  background: var(--green-bg);
+  border-color: var(--green-border);
+}
+.tg-status-pill-active::before {
+  background: var(--green);
+  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.15);
+  animation: tg-pulse 2.2s ease-in-out infinite;
+}
+@keyframes tg-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.tg-terminal {
+  font-family: var(--font-num);
+  font-size: 11px;
+  color: var(--text-3);
+  letter-spacing: 0.02em;
+  line-height: 1.45;
+  padding: 6px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tg-terminal-connected {
+  color: var(--text-2);
+  border-color: var(--green-border);
+  background: linear-gradient(90deg, var(--green-bg), var(--surface));
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   TABS
+   ══════════════════════════════════════════════════════════════════════════ */
+.tg-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.tg-tab {
+  background: none;
+  border: none;
+  padding: 10px 12px;
+  color: var(--text-3);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 1.5px solid transparent;
+  margin-bottom: -1px;
+  transition: color 0.15s, border-color 0.15s;
+  letter-spacing: -0.005em;
+}
+.tg-tab:hover {
+  color: var(--text-2);
+}
+.tg-tab-active {
+  color: var(--text);
+  border-color: var(--text);
+}
+.tg-tab:focus-visible {
+  outline: none;
+  color: var(--text);
+  border-color: var(--amber);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MAIN + PANELS
+   ══════════════════════════════════════════════════════════════════════════ */
+.tg-main {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 16px 20px 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-hi) var(--surface);
+}
+.tg-main::-webkit-scrollbar {
+  width: 8px;
+}
+.tg-main::-webkit-scrollbar-track {
+  background: var(--surface);
+}
+.tg-main::-webkit-scrollbar-thumb {
+  background: var(--border-hi);
+  border-radius: 3px;
+}
+.tg-panel {
+  display: none;
+}
+.tg-panel-active {
+  display: block;
+  animation: tg-fade-in 0.22s ease both;
+}
+@keyframes tg-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Section scaffolding ─────────────────────────────────────────────────── */
+.tg-section {
+  margin-bottom: 20px;
+}
+.tg-section-label {
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  color: var(--text-3);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 500;
+  margin-bottom: 10px;
+}
+.tg-section-label-inline {
+  margin-bottom: 0;
+}
+.tg-section-intro {
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.55;
+  margin: -4px 0 12px;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ACCOUNT METRICS (hero P&L + tile grid)
+   ══════════════════════════════════════════════════════════════════════════ */
+.tg-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.tg-metric {
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition: border-color 0.2s;
+}
+.tg-metric-hero {
+  grid-column: span 2;
+  padding: 18px 16px 16px;
+  background:
+    radial-gradient(300px 80px at 0% 0%, rgba(74, 222, 128, 0.06), transparent 70%),
+    var(--surface);
+}
+.tg-metric-label {
+  font-size: 11px;
+  color: var(--text-3);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.tg-metric-value {
+  font-family: var(--font-num);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  margin-top: 2px;
+}
+.tg-metric-hero .tg-metric-value {
+  font-size: 28px;
+  letter-spacing: -0.03em;
+  margin-top: 6px;
+  line-height: 1;
+}
+.tg-metric-caption {
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  color: var(--text-3);
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.tg-metric-profit .tg-metric-value {
+  color: var(--green);
+}
+.tg-metric-loss .tg-metric-value {
+  color: var(--red);
+}
+.tg-metric-warn {
+  border-color: var(--amber-border);
+  background: linear-gradient(180deg, var(--amber-bg), var(--surface));
+}
+
+/* ── Progress bar ─────────────────────────────────────────────────────────── */
+.tg-progress-wrap {
+  height: 4px;
+  background: var(--surface);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+  margin-top: 4px;
+}
+.tg-progress-bar {
+  height: 100%;
+  width: 0;
+  background: var(--green);
+  border-radius: var(--r-pill);
+  transition: width 0.35s ease, background-color 0.2s;
+}
+.tg-progress-warn .tg-progress-bar {
+  background: var(--amber);
+}
+.tg-progress-danger .tg-progress-bar {
+  background: var(--red);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   FUNDED SECTION
+   ══════════════════════════════════════════════════════════════════════════ */
+.tg-funded-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.tg-funded-stat {
+  padding: 10px 10px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.tg-funded-label {
+  font-size: 10px;
+  color: var(--text-3);
+  letter-spacing: 0.02em;
+  font-weight: 500;
+}
+.tg-funded-value {
+  font-family: var(--font-num);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.tg-funded-meta {
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  color: var(--text-3);
+  margin: 6px 0 10px;
+  line-height: 1.5;
+}
+.tg-funded-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.tg-adjust-form {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tg-adjust-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PILLS (session)
+   ══════════════════════════════════════════════════════════════════════════ */
+.tg-pills-row {
+  display: flex;
+  gap: 8px;
+}
+.tg-pill {
+  flex: 1;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.tg-pill-label {
+  font-size: 11px;
+  color: var(--text-3);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.tg-pill-value {
+  font-family: var(--font-num);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.tg-pill-inline {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 10.5px;
+  font-weight: 500;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  color: var(--text-2);
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   OVERVIEW TRADE SUMMARY
+   ══════════════════════════════════════════════════════════════════════════ */
+.tg-overview-trade-summary {
+  padding: 14px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.55;
+}
+.tg-overview-trade-summary.tg-has-positions {
+  color: var(--text);
+  border-color: var(--green-border);
+  background: linear-gradient(90deg, var(--green-bg), var(--surface));
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PAIRING CONNECTED (dashboard link)
+   ══════════════════════════════════════════════════════════════════════════ */
+.tg-pairing-connected {
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.tg-kv-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  font-size: 12px;
+}
+.tg-kv-row + .tg-kv-row {
+  border-top: 1px solid var(--border);
+}
+.tg-kv-k {
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+.tg-kv-v {
+  color: var(--text);
+  font-family: var(--font-num);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tg-kv-v code {
+  font: inherit;
+  color: inherit;
+  background: none;
+  padding: 0;
+}
+.tg-pairing-connected .tg-link-danger {
+  margin-top: 10px;
+  display: inline-block;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   RULES LIST (API)
+   ══════════════════════════════════════════════════════════════════════════ */
+.tg-rules-api-meta {
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  color: var(--text-3);
+  margin-bottom: 12px;
+  letter-spacing: 0.02em;
+}
+.tg-rules-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tg-rule-item,
+.tg-rule-api-card {
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.tg-rule-api-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.tg-rule-api-card-titles {
+  flex: 1;
+  min-width: 0;
+}
+.tg-rule-item-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  letter-spacing: -0.005em;
+  margin-bottom: 2px;
+}
+.tg-rule-api-slug {
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  color: var(--text-3);
+  letter-spacing: 0.02em;
+}
+.tg-rule-api-badge {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border-radius: var(--r-pill);
+  font-family: var(--font-num);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-3);
+}
+.tg-rule-api-badge.tg-rule-on,
+.tg-rule-api-badge.tg-rule-enabled,
+.tg-rule-api-badge.on {
+  background: var(--green-bg);
+  border-color: var(--green-border);
+  color: var(--green);
+}
+.tg-rule-api-badge.tg-rule-warn,
+.tg-rule-api-badge.warn {
+  background: var(--amber-bg);
+  border-color: var(--amber-border);
+  color: var(--amber);
+}
+.tg-rule-api-badge.tg-rule-off,
+.tg-rule-api-badge.off {
+  background: var(--surface-2);
+  color: var(--text-3);
+}
+.tg-rule-api-badge.tg-rule-violated,
+.tg-rule-api-badge.violated {
+  background: var(--red-bg);
+  border-color: var(--red-border);
+  color: var(--red);
+}
+.tg-rule-item-desc {
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.55;
+  margin-bottom: 10px;
+}
+.tg-rule-api-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.tg-rule-api-field {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 11.5px;
+}
+.tg-rule-api-field-k {
+  color: var(--text-3);
+}
+.tg-rule-api-field-v {
+  color: var(--text);
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+  letter-spacing: -0.01em;
+}
+.tg-rule-api-field-note {
+  color: var(--text-3);
+  font-style: italic;
+  justify-content: flex-start;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   CONFIG DETAILS (collapsed section)
+   ══════════════════════════════════════════════════════════════════════════ */
+.tg-config-details {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.tg-config-details[open] {
+  background: var(--surface);
+}
+.tg-config-summary,
+.tg-debug-summary {
+  list-style: none;
+  padding: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  user-select: none;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.tg-config-summary::-webkit-details-marker,
+.tg-debug-summary::-webkit-details-marker {
+  display: none;
+}
+.tg-config-details[open] > .tg-config-summary,
+.tg-debug-panel[open] > .tg-debug-summary {
+  border-bottom: 1px solid var(--border);
+}
+.tg-config-chevron {
+  width: 8px;
+  height: 8px;
+  border-right: 1.5px solid var(--text-3);
+  border-bottom: 1.5px solid var(--text-3);
+  transform: rotate(45deg) translate(-2px, -2px);
+  transition: transform 0.18s;
+}
+.tg-config-details[open] .tg-config-chevron,
+.tg-debug-panel[open] .tg-config-chevron {
+  transform: rotate(-135deg) translate(-2px, -2px);
+}
+
+/* ── Config form ─────────────────────────────────────────────────────────── */
+.tg-config-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 14px;
+}
+.tg-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  grid-column: span 1;
+}
+.tg-field-label {
+  font-size: 11px;
+  color: var(--text-2);
+  font-weight: 500;
+}
+.tg-field-group {
+  grid-column: span 2;
+  font-family: var(--font-num);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  font-weight: 500;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  margin-top: 6px;
+}
+.tg-field-checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  grid-column: span 2;
+  padding: 8px 10px;
+  background: var(--bg);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.tg-field-checkbox input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--green);
+  cursor: pointer;
+}
+.tg-field-checkbox .tg-field-label {
+  color: var(--text);
+  font-size: 12px;
+}
+.tg-field-inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.tg-input {
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-family: var(--font-num);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+.tg-input:focus {
+  outline: none;
+  border-color: var(--text-2);
+}
+.tg-input-sm {
+  padding: 4px 8px;
+  font-size: 11.5px;
+  width: auto;
+}
+.tg-config-grid .tg-btn {
+  grid-column: span 2;
+  margin-top: 8px;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   POSITIONS LIST (Trades tab)
+   ══════════════════════════════════════════════════════════════════════════ */
+.tg-positions-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tg-position-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.tg-position-card-empty {
+  padding: 16px;
+  color: var(--text-2);
+  font-size: 12.5px;
+  text-align: center;
+}
+.tg-position-card-toggle {
+  width: 100%;
+  padding: 12px 14px;
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+}
+.tg-position-card-toggle:hover {
+  background: var(--surface-2);
+}
+.tg-position-card-toggle-label {
+  color: var(--text-3);
+  font-size: 11px;
+  font-family: var(--font-num);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+.tg-position-card-toggle-summary {
+  flex: 1;
+  color: var(--text);
+  font-family: var(--font-num);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.tg-position-card-chevron {
+  width: 8px;
+  height: 8px;
+  border-right: 1.5px solid var(--text-3);
+  border-bottom: 1.5px solid var(--text-3);
+  transform: rotate(-135deg) translate(2px, 2px);
+  transition: transform 0.18s;
+}
+.tg-position-card-collapsed .tg-position-card-chevron {
+  transform: rotate(45deg) translate(-2px, -2px);
+}
+.tg-position-card-body {
+  padding: 4px 14px 14px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.tg-position-card-collapsed .tg-position-card-body {
+  display: none;
+}
+.tg-current-trade {
+  display: flex;
+  flex-direction: column;
+}
+.tg-trade-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 0;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.tg-trade-row:last-child {
+  border-bottom: none;
+}
+.tg-trade-label {
+  color: var(--text-3);
+}
+.tg-trade-value {
+  color: var(--text);
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  letter-spacing: -0.01em;
+}
+.tg-trade-row-pnl .tg-trade-value {
+  font-size: 13px;
+  font-weight: 600;
+}
+.tg-trade-profit .tg-trade-value {
+  color: var(--green);
+}
+.tg-trade-loss .tg-trade-value {
+  color: var(--red);
+}
+.tg-position-card-side {
+  padding: 2px 7px;
+  border-radius: var(--r-sm);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+.tg-side-buy {
+  background: var(--green-bg);
+  color: var(--green);
+  border: 1px solid var(--green-border);
+}
+.tg-side-sell {
+  background: var(--red-bg);
+  color: var(--red);
+  border: 1px solid var(--red-border);
+}
+
+/* Trade rules subsection */
+.tg-trade-rule {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 6px 0;
+  font-size: 11.5px;
+  border-bottom: 1px solid var(--border);
+}
+.tg-trade-rule:last-child {
+  border-bottom: none;
+}
+.tg-trade-rule-name {
+  color: var(--text-2);
+}
+.tg-trade-rule-status-ok {
+  color: var(--green);
+  font-family: var(--font-num);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+.tg-trade-rule-status-warn {
+  color: var(--amber);
+  font-family: var(--font-num);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+.tg-trade-rule-status-bad {
+  color: var(--red);
+  font-family: var(--font-num);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   FOOTER
+   ══════════════════════════════════════════════════════════════════════════ */
+.tg-footer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  flex-wrap: wrap;
+}
+.tg-footer-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.tg-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-4);
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+.tg-status-dot-ready {
+  background: var(--green);
+  box-shadow: 0 0 6px rgba(74, 222, 128, 0.5);
+}
+.tg-status-dot-error {
+  background: var(--red);
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.5);
+}
+.tg-status {
+  font-size: 11px;
+  color: var(--text-3);
+  font-family: var(--font-num);
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tg-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   flex-shrink: 0;
 }
 
-.tg-status-dot.tg-status-dot-ready {
-  background: #22c55e;
-  box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
-}
-
-.tg-status-dot.tg-status-dot-error {
-  background: #ef4444;
-}
-
-.tg-status {
-  font-size: 11px;
-  color: #94a3b8;
-}
-
+/* ══════════════════════════════════════════════════════════════════════════
+   DEBUG PANEL
+   ══════════════════════════════════════════════════════════════════════════ */
 .tg-debug-panel {
-  border-top: 1px solid rgba(148, 163, 184, 0.08);
-  padding: 8px 16px 12px;
-  background: rgba(2, 6, 23, 0.55);
+  flex: 0 0 auto;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
 }
-
-.tg-debug-title {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+.tg-debug-panel:not([open]) .tg-debug-body { display: none; }
+.tg-debug-body { max-height: 200px; overflow-y: auto; }
+.tg-debug-summary {
+  padding: 10px 16px;
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #94a3b8;
-  margin-bottom: 6px;
+  color: var(--text-3);
+  border-bottom: none;
 }
-
+.tg-debug-body {
+  padding: 10px 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .tg-debug-line {
-  font-size: 11px;
-  color: #cbd5e1;
-  line-height: 1.4;
-  word-break: break-word;
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  color: var(--text-3);
+  line-height: 1.55;
+  word-break: break-all;
 }
-
 .tg-debug-actions {
   display: flex;
-  gap: 6px;
-  margin-top: 6px;
-  margin-bottom: 6px;
+  gap: 4px;
   flex-wrap: wrap;
 }
-
 .tg-debug-pre {
-  margin-top: 6px;
-  padding: 8px;
-  border-radius: 8px;
-  background: rgba(15, 23, 42, 0.65);
-  border: 1px solid rgba(148, 163, 184, 0.15);
-  color: #93c5fd;
-  font-size: 10px;
-  line-height: 1.35;
-  max-height: 140px;
-  overflow: auto;
+  margin: 0;
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-family: var(--font-num);
+  font-size: 10.5px;
+  color: var(--text-2);
   white-space: pre-wrap;
   word-break: break-word;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   RESPONSIVE (popup can render slightly wider on larger screens)
+   ══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 400px) {
+  .tg-root {
+    width: 100%;
+  }
+  .tg-funded-grid {
+    grid-template-columns: 1fr;
+  }
 }

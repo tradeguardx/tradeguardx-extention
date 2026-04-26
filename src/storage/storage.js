@@ -11,6 +11,8 @@ export class Storage {
     this.CLEAR_COOLDOWN_KEY = 'tradeGuardXClearCooldownUntil';
     this.CONFIG_KEY = 'tradeGuardXConfig';
     this.SELECTORS_KEY = 'tradeGuardXSelectors';
+    /** Last successful GET /rules payload (for Rules tab UI). */
+    this.RULES_BUNDLE_CACHE_KEY = 'tradeGuardXRulesBundleCache';
   }
 
   async _remove(key) {
@@ -97,8 +99,11 @@ export class Storage {
 
   /** Cooldown (ms) after clear during which no state updates are persisted. Survives service worker restart. */
   static get STATE_CLEAR_COOLDOWN_MS() {
-    // Keep cleared state stable for a while; content scripts keep evaluating in background.
-    return 300000; // 5 minutes
+    // Previously this was 5 minutes, which caused the popup UI (and other
+    // state that depends on lastHooked / lastAccountState) to stay \"stuck\"
+    // after a clear. We now disable the cooldown so state can start
+    // repopulating immediately after TG_CLEAR_STATE is used.
+    return 0;
   }
 
   /** Clear runtime state: delete the state key and start a cooldown so it is not recreated immediately. */
@@ -154,7 +159,14 @@ export class Storage {
       closeDayOnLossCountEnabled: false,
       closeDayOnLossCount: 2,
       riskPerTradeEnabled: false,
-      riskPerTradePercent: 1
+      riskPerTradePercent: 1,
+      stopLossAlertEnabled: true,
+      stopLossAlertDelaySeconds: 30,
+      minimumHoldEnabled: false,
+      minimumHoldMinutes: 3,
+      minimumHoldPlatformOverrides: null,
+      htfMinimumEnabled: false,
+      htfMinimumChartMinutes: 60
     };
     return { ...defaults, ...(raw || {}) };
   }
@@ -173,9 +185,14 @@ export class Storage {
    *   [hostname]: {
    *     buy_button: string,
    *     sell_button: string,
+   *     open_positions_tab: string,    // optional
+   *     pending_positions_tab: string, // optional
+   *     closed_positions_tab: string,  // optional
+   *     order_instrument: string, // optional: order-ticket pair label (hedging symbol)
    *     close_button: string,
    *     equity: string,
-   *     positions_table: string
+   *     positions_table: string,
+   *     closed_trades_section: string // optional: rows inside never counted as open positions
    *   }
    * }
    */
@@ -201,5 +218,20 @@ export class Storage {
   async ensureDefaults() {
     const config = await this._get(this.CONFIG_KEY);
     if (!config) await this.setConfig({});
+  }
+
+  /** Cached rules API bundle: { planSlug, maxRules, templates[], instances[] } */
+  async getRulesBundleCache() {
+    const raw = await this._get(this.RULES_BUNDLE_CACHE_KEY);
+    return raw && typeof raw === 'object' ? raw : null;
+  }
+
+  async setRulesBundleCache(bundle) {
+    if (!bundle || typeof bundle !== 'object') return;
+    await this._set(this.RULES_BUNDLE_CACHE_KEY, bundle);
+  }
+
+  async clearRulesBundleCache() {
+    await this._remove(this.RULES_BUNDLE_CACHE_KEY);
   }
 }

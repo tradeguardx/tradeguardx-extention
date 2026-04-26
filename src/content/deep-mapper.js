@@ -302,8 +302,9 @@ class DeepMapper {
 A user clicked somewhere on their broker's positions table. Your job is to analyze
 the full DOM structure and return EXACT CSS selectors for each trade field.
 
-These selectors will be used as: row.querySelector(selector)
-They must point to the LEAF element that contains the actual value text.
+Row fields are used as: row.querySelector(selector)
+Document/global fields are used as: document.querySelector(selector)
+For row fields, selector must point to the LEAF element that contains the value text.
 
 === USER MANUAL FIELD HINTS (from clicks) ===
 ${Object.entries(context.manualSelectionHints || {})
@@ -366,6 +367,7 @@ SELECTOR PRIORITY (use the highest available):
 
 IMPORTANT RULES:
 - Selector must work scoped inside a single row: row.querySelector(YOUR_SELECTOR)
+- For document/global fields (rowSelector, balanceSelector, equity, buyButton, sellButton, orderInstrument, openTab, pendingTab, closedTab, closedTradesContainer), return full-page selectors for document.querySelector
 - Target the LEAF element with the actual text value, not a wrapper
 - DO NOT mix up similar fields
 - For closeButton, target the actual clickable button element
@@ -404,7 +406,15 @@ FIELDS TO MAP:
   "pnl": null,
   "closeButton": null,
   "rowSelector": null,
-  "balanceSelector": null
+  "balanceSelector": null,
+  "equity": null,
+  "buyButton": null,
+  "sellButton": null,
+  "orderInstrument": null,
+  "openTab": null,
+  "pendingTab": null,
+  "closedTab": null,
+  "closedTradesContainer": null
 }`;
   }
 
@@ -457,6 +467,7 @@ RULES:
 - row scoped selectors for row fields
 - no class selectors
 - prefer data-test/data-testid
+- include all known fields from previous JSON, especially orderInstrument/openTab/pendingTab/closedTab/closedTradesContainer
 - return ONLY JSON`;
   }
 
@@ -509,16 +520,61 @@ RULES:
     return merged;
   }
 
+  _normalizeSelectorMapKeys(selectorMap) {
+    const input = selectorMap && typeof selectorMap === 'object' ? selectorMap : {};
+    const aliases = {
+      size: 'volume',
+      qty: 'volume',
+      quantity: 'volume',
+      openPrice: 'entryPrice',
+      markPrice: 'currentPrice',
+      marketPrice: 'currentPrice',
+      tp: 'takeProfit',
+      sl: 'stopLoss',
+      profit: 'pnl',
+      pl: 'pnl',
+      close: 'closeButton',
+      row: 'rowSelector',
+      balance: 'balanceSelector',
+      equitySelector: 'equity',
+      buy: 'buyButton',
+      sell: 'sellButton',
+      orderInstrumentSelector: 'orderInstrument',
+      open_positions_tab: 'openTab',
+      pending_positions_tab: 'pendingTab',
+      closed_positions_tab: 'closedTab',
+      closed_trades_section: 'closedTradesContainer'
+    };
+    const normalized = {};
+    Object.entries(input).forEach(([field, selector]) => {
+      const key = aliases[field] || field;
+      if (!(key in normalized) || normalized[key] == null) normalized[key] = selector;
+    });
+    return normalized;
+  }
+
   _validateAndScore(selectorMap, rowEl) {
+    const normalizedMap = this._normalizeSelectorMapKeys(selectorMap);
     const result = {};
-    const skipRow = ['rowSelector', 'balanceSelector'];
-    for (const [field, selector] of Object.entries(selectorMap || {})) {
+    const documentLevelFields = [
+      'rowSelector',
+      'balanceSelector',
+      'equity',
+      'buyButton',
+      'sellButton',
+      'orderInstrument',
+      'openTab',
+      'pendingTab',
+      'closedTab',
+      'closedTradesContainer'
+    ];
+    for (const [field, selector] of Object.entries(normalizedMap || {})) {
       if (!selector || typeof selector !== 'string') {
         result[field] = { selector: null, valid: false, value: null };
         continue;
       }
 
-      if (skipRow.includes(field)) {
+      if (documentLevelFields.includes(field)) {
         try {
           const el = document.querySelector(selector);
           result[field] = {
@@ -562,6 +618,12 @@ RULES:
         return /\d/.test(v) ? null : 'expected a number';
       case 'pnl':
         return /[+-]?\d/.test(v) ? null : 'expected a number with +/- prefix';
+      case 'orderInstrument':
+        return /[A-Z]{2,}/.test(v) ? null : 'expected instrument symbol text';
+      case 'openTab':
+      case 'pendingTab':
+      case 'closedTab':
+        return /\b(open|pending|closed|history)\b/i.test(v) ? null : 'expected tab label text';
       case 'takeProfit':
       case 'stopLoss':
         return /\d/.test(v) || /add|not set|--|—/i.test(v)

@@ -21,6 +21,18 @@ const NEGATIVE_ROW_PATTERNS = [
   /\b(tpsl|sltp)\b/i
 ];
 
+/**
+ * Exness webtrading (and similar): each open row uses data-test="portfolio_list_row_<positionId>".
+ * Guided mapping captures one ID; when the user opens a new position the ID changes and the
+ * saved selector matches nothing. Normalize to a prefix attribute selector.
+ */
+function normalizeDynamicRowSelector(selector) {
+  if (typeof selector !== 'string' || !selector.trim()) return selector;
+  const s = selector.trim();
+  if (!/portfolio_list_row_\d+/.test(s)) return s;
+  return s.replace(/\[data-test=(["'])portfolio_list_row_\d+\1\]/g, '[data-test^=$1portfolio_list_row_$1]');
+}
+
 class OrderTableTracker {
   constructor(detector, options = {}) {
     this.detector = detector;
@@ -77,7 +89,7 @@ class OrderTableTracker {
       ];
     }
     this._rowSelectorHint = profile.rowSelectorHint || null;
-    this._rowSelector = profile.rowSelector || null;
+    this._rowSelector = normalizeDynamicRowSelector(profile.rowSelector || null);
   }
 
   exportProfile() {
@@ -224,6 +236,13 @@ class OrderTableTracker {
     return { map, aliases };
   }
 
+  _isClosedTradesSectionRow(row) {
+    return (
+      typeof this.detector?.isElementInsideClosedTradesSection === 'function' &&
+      this.detector.isElementInsideClosedTradesSection(row)
+    );
+  }
+
   _fieldFromHeader(label) {
     const l = (label || '').toLowerCase();
     if (/(symbol|instrument|pair)/.test(l)) return 'symbol';
@@ -239,13 +258,17 @@ class OrderTableTracker {
 
   _discoverRows(root) {
     if (!root) return [];
+    const tabContext = this.detector?.getTradeTabContext ? this.detector.getTradeTabContext(root) : 'unknown';
+    if (tabContext === 'closed' || tabContext === 'pending') return [];
     if (this._strictMappedMode) {
       const strictSelector = this._rowSelector || this._rowSelectorHint;
       const normalizeRows = (nodes) =>
         Array.from(nodes || []).filter((row) => row instanceof HTMLElement && row.isConnected);
       if (strictSelector) {
         try {
-          const strictRows = normalizeRows(root.querySelectorAll(strictSelector));
+          const strictRows = normalizeRows(root.querySelectorAll(strictSelector)).filter(
+            (row) => !this._isClosedTradesSectionRow(row)
+          );
           if (strictRows.length > 0) return strictRows;
         } catch (_err) {
           // continue to mapped-only fallback below
@@ -262,6 +285,7 @@ class OrderTableTracker {
         root.querySelectorAll('tr, [role="row"], [data-row], [data-position-id], [data-order-id], div, li')
       );
       return candidates.filter((row) => {
+        if (this._isClosedTradesSectionRow(row)) return false;
         try {
           const hitCount = mappedSelectors.reduce((n, sel) => {
             try {
@@ -294,6 +318,10 @@ class OrderTableTracker {
     const filtered = Array.from(rows).filter((row) => {
       if (!(row instanceof HTMLElement) || !row.isConnected) {
         stats.rejected.disconnected += 1;
+        return false;
+      }
+      if (this._isClosedTradesSectionRow(row)) {
+        stats.rejected.closedSection = (stats.rejected.closedSection || 0) + 1;
         return false;
       }
       const text = (row.innerText || '').trim();
@@ -661,7 +689,10 @@ class OrderTableTracker {
     const normalized = raw
       .replace(/\u2212/g, '-') // Unicode minus
       .replace(/[\u00a0\s]+/g, ' ') // normalize spaces
-      .replace(/,/g, '');
+      .replace(/,/g, '')
+      // Strip currency symbols so formats like "-$1.41" or "$-1.41" keep the sign
+      // adjacent to the digits — otherwise the regex below matches "1.41" and drops the minus.
+      .replace(/[$£€¥₹₩]/g, '');
     const isParenNegative = /^\s*\(.*\)\s*$/.test(normalized);
     const match = normalized.match(/[+-]?\d*\.?\d+(?:[eE][+-]?\d+)?/);
     if (!match) return null;
@@ -909,12 +940,12 @@ class OrderTableTracker {
     const symbolFromRow = this.detector?.getBestSymbolFromText
       ? this.detector.getBestSymbolFromText(rowText)
       : null;
-    const symbol = this._strictMappedMode
-      ? symbolFromBinding
-      : (symbolFromRow || symbolFromBinding);
+    // Prefer mapped cell, but if selectors drift (common after broker DOM changes), use row text.
+    const symbol = symbolFromBinding || symbolFromRow;
     const sideText = this._readFieldWithConfidence(profile, row, 'side', rowText) || rowText;
     const side = this._sideFromText(sideText) || this._sideFromAttrs(row) || 'UNKNOWN';
     if (!symbol) return null;
+    if (side !== 'BUY' && side !== 'SELL') return null;
 
     const stopLossText = this._readFieldWithConfidence(profile, row, 'stopLoss', rowText);
     const takeProfitText = this._readFieldWithConfidence(profile, row, 'takeProfit', rowText);
@@ -987,5 +1018,6 @@ class OrderTableTracker {
   }
 }
 
+OrderTableTracker.normalizeDynamicRowSelector = normalizeDynamicRowSelector;
 window.OrderTableTracker = OrderTableTracker;
 

@@ -54,6 +54,22 @@ const ORDER_FIELD_KEYWORDS = {
 
 const ORDER_CONTAINER_MIN_SCORE = 6;
 let preferredPositionsSelector = null;
+/** Optional mapped root for closed trades / history; rows inside are never treated as open positions. */
+let closedTradesSectionSelector = null;
+/** Optional mapped tab selectors to determine whether Open/Pending/Closed is active. */
+let tradeTabSelectors = {
+  open: null,
+  pending: null,
+  closed: null
+};
+
+/**
+ * Section/tab labels that indicate history only.
+ * Do NOT use generic "closed positions" — parent panels often say "open and closed positions"
+ * for the whole terminal; that would hide every open row (e.g. Exness).
+ */
+const CLOSED_TRADES_SECTION_LABEL_RE =
+  /\b(closed\s+trades?|trade\s+history|order\s+history|orders?\s+history|filled\s+orders?|past\s+trades?)\b/i;
 
 /** Multi-source context: element + parent + closest td (labels on parent, value in child e.g. <td data-testid="entryPrice"><h5>67840.6</h5>). */
 function getElementContext(el) {
@@ -85,6 +101,79 @@ function normalizeSymbol(symbol) {
   return (symbol || '')
     .replace(/[\/.\-]/g, '')
     .toUpperCase();
+}
+
+/**
+ * Parse a chart interval label (e.g. "15m", "1H", "4h", "D", "1W") to minutes.
+ * Returns null if the text does not look like a timeframe.
+ */
+function parseTimeframeLabel(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  const t = raw.replace(/\u00a0/g, ' ').trim();
+  if (!t) return null;
+  const compact = t.replace(/\s+/g, '').toUpperCase();
+  if (/^(1D|D)$/.test(compact)) return 24 * 60;
+  if (/^(1W|W)$/.test(compact)) return 7 * 24 * 60;
+  if (/^(1M|M|MN|MO|1MO)$/.test(compact)) return 30 * 24 * 60;
+  const m = compact.match(/^(\d+)(S|SEC|M|MIN|H|HR|D|DAY|W|WK)$/);
+  if (m) {
+    const n = parseInt(m[1], 10);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    const u = m[2].toUpperCase();
+    if (u.startsWith('S')) return Math.max(1, Math.round(n / 60));
+    if (u.startsWith('M')) return n;
+    if (u.startsWith('H')) return n * 60;
+    if (u.startsWith('D')) return n * 24 * 60;
+    if (u.startsWith('W')) return n * 7 * 24 * 60;
+    return null;
+  }
+  const bare = compact.match(/^(\d{1,2})$/);
+  if (bare) {
+    const n = parseInt(bare[1], 10);
+    if ([1, 2, 3, 4, 5].includes(n)) return n;
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Best-effort active chart interval in minutes (TradingView-like and generic toolbars).
+ * Returns null when no confident match — callers should not block in that case.
+ */
+function detectChartTimeframeMinutes(root) {
+  const doc = root && root.nodeType === 9 ? root : root?.ownerDocument || document;
+  const body = doc.body;
+  if (!body) return null;
+
+  const matches = [];
+  const nodes = body.querySelectorAll('button, [role="button"], [role="tab"], [role="radio"], a');
+  const limit = Math.min(nodes.length, 900);
+  for (let i = 0; i < limit; i++) {
+    const el = nodes[i];
+    if (!(el instanceof HTMLElement) || !el.isConnected) continue;
+    const txt = (el.innerText || el.textContent || '').split('\n')[0].trim();
+    if (txt.length < 1 || txt.length > 10) continue;
+    const mins = parseTimeframeLabel(txt);
+    if (mins == null) continue;
+    let score = 0;
+    if (el.getAttribute('aria-pressed') === 'true') score += 5;
+    if (el.getAttribute('aria-selected') === 'true') score += 5;
+    if (el.getAttribute('aria-checked') === 'true') score += 5;
+    const c = String(el.className || '').toLowerCase();
+    if (/selected|active|pressed|isactive|current/.test(c)) score += 3;
+    if (/\binterval|timeframe|resolution|period\b/.test(c)) score += 2;
+    matches.push({ mins, score });
+  }
+
+  const strong = matches.filter((x) => x.score >= 3);
+  if (strong.length === 1) return strong[0].mins;
+  if (strong.length > 1) {
+    strong.sort((a, b) => b.score - a.score || a.mins - b.mins);
+    return strong[0].mins;
+  }
+  const weak = matches.filter((x) => x.score >= 1);
+  if (weak.length === 1) return weak[0].mins;
+  return null;
 }
 
 function isStableToken(token) {
@@ -428,6 +517,157 @@ function getPreferredTradesRoot(root) {
   return root;
 }
 
+function setClosedTradesSectionSelector(selector) {
+  closedTradesSectionSelector = typeof selector === 'string' && selector.trim() ? selector.trim() : null;
+}
+
+function getClosedTradesSectionSelector() {
+  return closedTradesSectionSelector;
+}
+
+function _normalizeSelectorMaybe(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function _isTabElementActive(el) {
+  if (!(el instanceof HTMLElement) || !el.isConnected) return false;
+  const ariaSelected = (el.getAttribute('aria-selected') || '').toLowerCase();
+  const ariaCurrent = (el.getAttribute('aria-current') || '').toLowerCase();
+  const dataState = (el.getAttribute('data-state') || '').toLowerCase();
+  const cls = (el.className || '').toLowerCase();
+  if (ariaSelected === 'true') return true;
+  if (ariaCurrent === 'true' || ariaCurrent === 'page' || ariaCurrent === 'step') return true;
+  if (dataState === 'active' || dataState === 'selected' || dataState === 'open') return true;
+  if (/\b(active|selected|current)\b/.test(cls) && !/\binactive|disabled\b/.test(cls)) return true;
+  return false;
+}
+
+function _labelToTradeTabContext(text) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!t) return 'unknown';
+  if (/\b(closed|history|filled|past)\b/.test(t)) return 'closed';
+  if (/\bpending\b/.test(t)) return 'pending';
+  if (/\b(open|position|positions|trades?)\b/.test(t)) return 'open';
+  return 'unknown';
+}
+
+function setTradeTabSelectors({ open = null, pending = null, closed = null } = {}) {
+  tradeTabSelectors = {
+    open: _normalizeSelectorMaybe(open),
+    pending: _normalizeSelectorMaybe(pending),
+    closed: _normalizeSelectorMaybe(closed)
+  };
+}
+
+function getTradeTabSelectors() {
+  return { ...tradeTabSelectors };
+}
+
+function detectTradeTabContext(root = document.body) {
+  if (!document.body) return 'unknown';
+  const doc = root?.ownerDocument || document;
+  const preferred = getPreferredTradesRoot(root || doc.body) || doc.body;
+  const scope =
+    preferred?.closest?.(
+      '[data-test*="portfolio"], [class*="portfolio"], [class*="positions"], [class*="trades"], [role="region"], section'
+    ) || preferred || doc.body;
+
+  // Mapped selectors have highest confidence if present.
+  const mappedChecks = [
+    ['closed', tradeTabSelectors.closed],
+    ['pending', tradeTabSelectors.pending],
+    ['open', tradeTabSelectors.open]
+  ];
+  for (const [ctx, sel] of mappedChecks) {
+    if (!sel) continue;
+    try {
+      const el = doc.querySelector(sel);
+      if (el && _isTabElementActive(el)) return ctx;
+    } catch (_err) {
+      // ignore invalid selector
+    }
+  }
+
+  // Heuristic fallback: inspect active tab-like elements near portfolio scope.
+  let candidates = [];
+  try {
+    candidates = Array.from(
+      scope.querySelectorAll(
+        '[role="tab"][aria-selected="true"], [role="tab"][aria-current], [aria-selected="true"], [data-state="active"], [class*="tab"][class*="active"], [class*="tabs"] [class*="active"]'
+      )
+    );
+  } catch (_err) {
+    candidates = [];
+  }
+  for (const el of candidates.slice(0, 120)) {
+    if (!_isTabElementActive(el)) continue;
+    const txt =
+      (el.innerText || el.textContent || '') +
+      ' ' +
+      (el.getAttribute('aria-label') || '') +
+      ' ' +
+      (el.getAttribute('title') || '');
+    const ctx = _labelToTradeTabContext(txt);
+    if (ctx !== 'unknown') return ctx;
+  }
+  return 'unknown';
+}
+
+/**
+ * True when el must be excluded from "active position" consideration.
+ *
+ * Inverted scope (preferred): when the admin has mapped the active-positions
+ * container via `preferredPositionsSelector`, any element OUTSIDE that scope
+ * is treated as not-active. This removes the need to enumerate every sibling
+ * table (open orders, closed trades, order history) to ignore.
+ *
+ * Legacy fallbacks (kept for backwards compat with older mappings and for
+ * unmapped/heuristic mode): the explicit closed-trades selector, and a
+ * walk-up regex scan for history/pending/filled markers.
+ */
+function isElementInsideClosedTradesSection(el) {
+  if (!(el instanceof HTMLElement) || !el.isConnected) return false;
+  if (preferredPositionsSelector) {
+    try {
+      const container = document.querySelector(preferredPositionsSelector);
+      if (container && !container.contains(el)) return true;
+    } catch (_err) {
+      // invalid preferred selector — fall through to legacy checks
+    }
+  }
+  if (closedTradesSectionSelector) {
+    try {
+      if (el.closest(closedTradesSectionSelector)) return true;
+    } catch (_err) {
+      // invalid selector
+    }
+  }
+  let cur = el;
+  for (let depth = 0; depth < 28 && cur && cur !== document.body; depth += 1) {
+    const tag = (cur.tagName || '').toLowerCase();
+    const role = (cur.getAttribute('role') || '').toLowerCase();
+    const aria = (cur.getAttribute('aria-label') || '').toLowerCase();
+    const tid = (cur.getAttribute('data-testid') || '').toLowerCase();
+    const id = (cur.id || '').toLowerCase();
+    const cls = typeof cur.className === 'string' ? cur.className.toLowerCase() : '';
+    const blob = `${aria} ${tid} ${id} ${cls}`;
+    if (CLOSED_TRADES_SECTION_LABEL_RE.test(blob)) return true;
+    if (tag === 'section' || role === 'tabpanel' || role === 'region') {
+      const h = cur.querySelector?.('h1,h2,h3,h4,h5,h6,[class*="header"][class*="title"],[class*="title"]');
+      const ht = (h?.innerText || '').slice(0, 280).toLowerCase();
+      if (ht && CLOSED_TRADES_SECTION_LABEL_RE.test(ht)) return true;
+    }
+    const labelledBy = cur.getAttribute('aria-labelledby');
+    if (labelledBy) {
+      const lab = document.getElementById(labelledBy);
+      const lt = (lab?.innerText || '').slice(0, 280).toLowerCase();
+      if (lt && CLOSED_TRADES_SECTION_LABEL_RE.test(lt)) return true;
+    }
+    cur = cur.parentElement;
+  }
+  return false;
+}
+
 /**
  * Detect side (BUY/SELL) from TRADE_CONFIG keywords in text + HTML (Delta colored divs, Exness text).
  */
@@ -499,8 +739,92 @@ const INVALID_SYMBOL_TOKENS = new Set([
   'MARKET',
   'LIMIT',
   'MAKER',
-  'TAKER'
+  'TAKER',
+  // Order-ticket labels often matched by SYMBOL_REGEX (not instruments)
+  'VOLUME',
+  'LOT',
+  'LOTS',
+  'SIZE',
+  'QTY',
+  'QUANTITY',
+  'AMOUNT',
+  'LEVERAGE',
+  'MARGIN',
+  'SPREAD',
+  'SWAP',
+  'BID',
+  'ASK',
+  'PIPS',
+  'POINTS',
+  'CONTRACTS',
+  'REGULAR',
+  'INSTRUMENT',
+  'SYMBOL',
+  // P&L / account column labels (Exness and others)
+  'PROFIT',
+  'LOSS',
+  'LOSSES',
+  'UNREALIZED',
+  'FLOATING',
+  'EQUITY',
+  'BALANCE',
+  'FREE',
+  'CREDIT',
+  'COMMISSION',
+  'DIVIDEND',
+  'ORDERS',
+  'POSITIONS',
+  'TRADES',
+  'TICKET',
+  'ACTION',
+  'TYPE',
+  'HEADER',
+  'FOOTER',
+  'TOTAL',
+  'SUMMARY',
+  'ACCOUNT',
+  'PENDING',
+  'CLOSED',
+  'HISTORY',
+  // Order dialog / button labels (match SYMBOL_REGEX)
+  'CANCEL',
+  'CONFIRM',
+  'SUBMIT',
+  'APPLY',
+  'MODIFY',
+  'DELETE',
+  'RESET',
+  'CLOSE',
+  'SEND',
+  'REJECT',
+  'ACCEPT',
+  'UPDATE',
+  'REFRESH',
+  'SEARCH',
+  'FILTER',
+  'EXPORT',
+  'IMPORT',
+  'SETTINGS',
+  'DETAILS',
+  'CHARTS',
+  'TIME',
+  'UNKNOWN',
+  'WATCH',
+  'ALERTS',
+  'NEWS',
+  'DEPTH',
+  'BOOK'
 ]);
+
+/**
+ * True for UI words that match SYMBOL_REGEX but are not instruments (used by hedging / pending symbol).
+ */
+function isInvalidSymbolToken(raw) {
+  if (raw == null || typeof raw !== 'string') return true;
+  const s = normalizeSymbol(raw.trim());
+  if (s.length < 2) return true;
+  return INVALID_SYMBOL_TOKENS.has(s);
+}
 
 function symbolFeatureScore(symbol) {
   if (!symbol) return -100;
@@ -995,6 +1319,8 @@ function detectStopLossTakeProfitAndProfit(row, scanRoot = document.body) {
 function detectTrades(root = document.body) {
   if (!root) return [];
   const preferredRoot = getPreferredTradesRoot(root);
+  const tabContext = detectTradeTabContext(preferredRoot || root);
+  if (tabContext === 'closed' || tabContext === 'pending') return [];
   const strictPreferredMode =
     !!preferredPositionsSelector &&
     root === document.body &&
@@ -1010,10 +1336,20 @@ function detectTrades(root = document.body) {
     );
     scopedRows.forEach((node) => {
       if (!(node instanceof HTMLElement) || !node.isConnected) return;
+      // Never treat TradeGuardX UI (overlays/panels) as broker position rows.
+      if (
+        node.closest?.(
+          '[id^="tg-"], [id*="tradeguardx"], [class*="tg-"], [class*="tradeguardx"], [data-tg-overlay]'
+        )
+      ) {
+        return;
+      }
       if (node.childElementCount > 50) return;
 
       const rect = node.getBoundingClientRect();
       if (rect.width === 0 && rect.height === 0) return;
+
+      if (isElementInsideClosedTradesSection(node)) return;
 
       const text = (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim();
       if (!text || text.length > 2000) return;
@@ -1061,6 +1397,7 @@ function detectTrades(root = document.body) {
       if (!symbol) return;
 
       const side = detectSide(node, text) || 'UNKNOWN';
+      if (side !== 'BUY' && side !== 'SELL') return;
 
       const details = detectStopLossTakeProfitAndProfit(node, scanRoot);
       const exactFields = detectTradeFieldElements(node);
@@ -1369,7 +1706,16 @@ window.TradeGuardX.universalDetector = {
   getPreferredPositionsSelector() {
     return preferredPositionsSelector;
   },
+  setClosedTradesSectionSelector,
+  getClosedTradesSectionSelector,
+  setTradeTabSelectors,
+  getTradeTabSelectors,
+  getTradeTabContext: detectTradeTabContext,
+  isElementInsideClosedTradesSection,
   normalizeSymbol,
+  isInvalidSymbolToken,
+  parseTimeframeLabel,
+  detectChartTimeframeMinutes,
   getBestSymbolFromText,
   getElementContext,
   TRADE_CONFIG,

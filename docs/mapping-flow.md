@@ -57,68 +57,13 @@ The background script listens for this message type and forwards the intent into
 `TradeMonitor` is responsible for:
 
 - Keeping track of whether a host is already mapped (`_hasSavedMappingForHost`, `_isMappedCrawlMode`).
-- Watching for likely trading pages and prompting guided mapping when appropriate (`_startMappingEligibilityWatcher`, `_maybeAutoStartGuidedMapping`).
+- **Not** auto-starting mapping when a page “looks like” a broker: guided mapping runs only after the user clicks **Map this host** in the popup (`TG_START_PLATFORM_MAPPING`).
 - Running a **guided mapping session** (`startGuidedPlatformMapping`), which:
   - Renders an overlay on the broker DOM explaining which elements to click.
   - Collects user clicks on the positions table row/cells.
   - For each click, constructs a `DeepMapper` and calls `map(clickedEl, options)`.
 
-Key mapping-related bits:
-
-```62:81:src/content/tradeMonitor.js
-async init() {
-  if (!this.detector) return;
-  this._attachRuntimeHandlers();
-  await this.loadSavedOrderIdentity();
-  if (window.OrderTableTracker && !this._orderTracker) {
-    this._orderTracker = new window.OrderTableTracker(this.detector, {
-      host: window.location.hostname
-    });
-    if (this._loadedSelectors?.order_profile) {
-      this._orderTracker.importProfile(this._loadedSelectors.order_profile);
-    }
-  }
-  this._requiresMapping = !this._hasSavedMappingForHost();
-  if (this._requiresMapping) {
-    this._startMappingEligibilityWatcher();
-    return;
-  }
-  this._stopMappingEligibilityWatcher();
-  this._startMonitoringLoops();
-}
-```
-
-```148:175:src/content/tradeMonitor.js
-_startMappingEligibilityWatcher() {
-  if (this._mappingEligibilityTimer) return;
-  if (!/^https?:/i.test(window.location.protocol || '')) return;
-  if (this._hasSavedMappingForHost()) return;
-
-  const tick = () => {
-    if (this._hasSavedMappingForHost()) {
-      this._requiresMapping = false;
-      this._stopMappingEligibilityWatcher();
-      return;
-    }
-    if (this._isMappingActive()) return;
-    if (!this._isLikelyBrokerTradingPage()) return;
-    if (this._mappingPromptedOnce) return;
-
-    this._mappingPromptedOnce = true;
-    this.startGuidedPlatformMapping().catch(() => {
-      this._mappingPromptedOnce = false;
-    });
-    if (typeof showToast === 'function') {
-      showToast('Broker terminal detected. Map this platform once to start detection.', 'info');
-    }
-  };
-
-  tick();
-  this._mappingEligibilityTimer = window.setInterval(tick, 2000);
-}
-```
-
-Once mapping is complete, `TradeMonitor` marks the loaded selectors as complete and will no longer re‑prompt automatically for this host.
+If `init()` finds no mapping for the host, it logs a console hint and returns early — **no** overlay or toast is shown until the user starts mapping from the popup. Once mapping is complete, `TradeMonitor` runs full monitoring for that host.
 
 ---
 

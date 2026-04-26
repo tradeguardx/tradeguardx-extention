@@ -74,7 +74,11 @@ export class RulesEngine {
    * Data for popup: metrics + config + session state.
    */
   async getPopupState() {
-    const [config, state] = await Promise.all([this.storage.getConfig(), this.storage.getState()]);
+    const [config, state, rulesBundle] = await Promise.all([
+      this.storage.getConfig(),
+      this.storage.getState(),
+      this.storage.getRulesBundleCache()
+    ]);
     const metrics = state.lastMetrics || null;
 
     let enrichedMetrics = metrics;
@@ -95,6 +99,7 @@ export class RulesEngine {
 
     return {
       config,
+      rulesBundle,
       metrics: enrichedMetrics || {
         startingEquity: config.accountSize,
         equity: accountState.equity || null,

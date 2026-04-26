@@ -19,7 +19,9 @@ function startMappingOnActiveTab() {
         }
         // Focus the tab first so the mapping overlay on the page is visible when it appears.
         chrome.tabs.update(activeTab.id, { active: true });
-        chrome.tabs.sendMessage(activeTab.id, { type: 'TG_START_PLATFORM_MAPPING' }, (response) => {
+        // frameId: 0 restricts delivery to the top frame — without it, every frame with a
+        // listener (after an allFrames injection) starts its own mapping overlay.
+        chrome.tabs.sendMessage(activeTab.id, { type: 'TG_START_PLATFORM_MAPPING' }, { frameId: 0 }, (response) => {
           if (chrome.runtime?.lastError) {
             resolve({ success: false, error: chrome.runtime.lastError.message || 'Unable to reach tab' });
             return;
@@ -79,36 +81,189 @@ function setStatus(text, tone = 'neutral') {
   }
 }
 
-function renderMetrics(metrics) {
+function setMetricTone(tileEl, tone) {
+  if (!tileEl) return;
+  tileEl.classList.remove('tg-metric-profit', 'tg-metric-loss');
+  if (tone === 'profit') tileEl.classList.add('tg-metric-profit');
+  else if (tone === 'loss') tileEl.classList.add('tg-metric-loss');
+}
+
+function formatSignedCurrency(value) {
+  if (value === null || value === undefined || Number.isNaN(value) || !Number.isFinite(value)) {
+    return '–';
+  }
+  const abs = Math.abs(value);
+  const sign = value > 0 ? '+' : value < 0 ? '−' : '';
+  return `${sign}$${formatCurrency(abs)}`;
+}
+
+function formatSignedPercent(value) {
+  if (value === null || value === undefined || Number.isNaN(value) || !Number.isFinite(value)) {
+    return '–';
+  }
+  const sign = value > 0 ? '+' : value < 0 ? '−' : '';
+  return `${sign}${Math.abs(value).toFixed(2)}%`;
+}
+
+/**
+ * Resolve the rule limit + the percent-of-baseline that produced it.
+ * Handles both amount-based and percent-based rule configs.
+ */
+function resolveRuleLimit({ enabled, type, pct, amount, baseline }) {
+  if (!enabled) return { amount: 0, pct: 0 };
+  const base = Number(baseline) || 0;
+  if (type === 'amount') {
+    const amt = Number(amount) || 0;
+    return { amount: amt, pct: base > 0 && amt > 0 ? (amt / base) * 100 : 0 };
+  }
+  const p = Number(pct) || 0;
+  return { amount: base > 0 && p > 0 ? (p / 100) * base : 0, pct: p };
+}
+
+function renderMetrics(metrics, config, accountMode) {
+  const totalPnlEl = document.getElementById('tg-total-pnl');
+  const totalPnlCaptionEl = document.getElementById('tg-total-pnl-caption');
+  const totalPnlTile = document.getElementById('tg-metric-total-pnl');
+  const totalPnlLabelEl = totalPnlTile?.querySelector('.tg-metric-label') || null;
   const accountSizeEl = document.getElementById('tg-account-size');
-  const equityEl = document.getElementById('tg-equity');
-  const floatingLossEl = document.getElementById('tg-floating-loss');
-  const dailyLimitEl = document.getElementById('tg-daily-limit');
-  const remainingLossEl = document.getElementById('tg-remaining-loss');
+  const accountSizeCaptionEl = document.getElementById('tg-account-size-caption');
+  const accountSizeTile = accountSizeEl?.closest('.tg-metric') || null;
+  const maxTotalLossEl = document.getElementById('tg-max-total-loss-limit');
+  const maxTotalLossCaptionEl = document.getElementById('tg-max-total-loss-caption');
+  const maxTotalLossTile = maxTotalLossEl?.closest('.tg-metric') || null;
+  const dailyLossLimitEl = document.getElementById('tg-daily-loss-limit');
+  const dailyLossCaptionEl = document.getElementById('tg-daily-loss-caption');
+  const dailyLossTile = dailyLossLimitEl?.closest('.tg-metric') || null;
   const progressWrap = document.getElementById('tg-progress-wrap');
   const progressBar = document.getElementById('tg-progress-bar');
 
+  if (accountSizeTile) accountSizeTile.classList.remove('tg-metric-warn');
+
   if (!metrics) {
+    if (totalPnlLabelEl) totalPnlLabelEl.textContent = 'Total P&L';
+    if (totalPnlEl) totalPnlEl.textContent = '–';
+    if (totalPnlCaptionEl) totalPnlCaptionEl.textContent = '–';
+    setMetricTone(totalPnlTile, null);
     if (accountSizeEl) accountSizeEl.textContent = '–';
-    if (equityEl) equityEl.textContent = '–';
-    if (floatingLossEl) floatingLossEl.textContent = '–';
-    if (dailyLimitEl) dailyLimitEl.textContent = '–';
-    if (remainingLossEl) remainingLossEl.textContent = '–';
+    if (accountSizeCaptionEl) accountSizeCaptionEl.textContent = '–';
+    if (maxTotalLossEl) maxTotalLossEl.textContent = '–';
+    if (maxTotalLossCaptionEl) maxTotalLossCaptionEl.textContent = '–';
+    if (dailyLossLimitEl) dailyLossLimitEl.textContent = '–';
+    if (dailyLossCaptionEl) dailyLossCaptionEl.textContent = '–';
     if (progressWrap) progressWrap.style.display = 'none';
     return;
   }
 
-  accountSizeEl.textContent = formatCurrency(metrics.startingEquity);
-  equityEl.textContent = formatCurrency(metrics.equity);
-  floatingLossEl.textContent = formatCurrency(metrics.floatingLoss);
-  dailyLimitEl.textContent = `Limit: ${formatCurrency(metrics.dailyLossLimitAmount)}`;
-  remainingLossEl.textContent = formatCurrency(metrics.remainingLoss);
+  const startingEquity = Number(metrics.startingEquity) || 0;
+  const equity = Number(metrics.equity) || 0;
+  const floatingLoss = Number(metrics.floatingLoss) || 0;
+  const configAccountSize = Number(config?.accountSize) || 0;
+  // Account size: funded accounts use the server-enriched challenge size; live
+  // accounts use the actual broker DOM balance (user-saved configAccountSize is
+  // just a preference and often stale — preferring it here produced nonsense
+  // "Total P&L" on live accounts where it was treated as a challenge baseline).
+  const accountSize = accountMode === 'live'
+    ? (startingEquity > 0 ? startingEquity : configAccountSize)
+    : (configAccountSize > 0 ? configAccountSize : startingEquity);
 
-  const limit = Number(metrics.dailyLossLimitAmount) || 0;
-  const loss = Number(metrics.floatingLoss) || 0;
-  if (progressWrap && progressBar && limit > 0) {
+  // Hero tile swaps label + meaning based on account mode:
+  //  - funded: Total P&L (equity vs challenge starting balance)
+  //  - live:   Balance / equity straight from the broker DOM (no reliable
+  //            challenge baseline exists for live accounts).
+  if (accountMode === 'live') {
+    if (totalPnlLabelEl) totalPnlLabelEl.textContent = 'Balance';
+    if (totalPnlEl) totalPnlEl.textContent = equity > 0 ? `$${formatCurrency(equity)}` : '–';
+    if (totalPnlCaptionEl) {
+      totalPnlCaptionEl.textContent = floatingLoss > 0
+        ? `Floating −$${formatCurrency(floatingLoss)}`
+        : 'Live account';
+    }
+    setMetricTone(totalPnlTile, floatingLoss > 0 ? 'loss' : null);
+  } else {
+    if (totalPnlLabelEl) totalPnlLabelEl.textContent = 'Total P&L';
+    const totalPnl = equity && accountSize ? equity - accountSize : null;
+    const totalPnlPct = totalPnl != null && accountSize > 0 ? (totalPnl / accountSize) * 100 : null;
+    if (totalPnlEl) {
+      totalPnlEl.textContent = totalPnl == null ? '–' : formatSignedCurrency(totalPnl);
+    }
+    if (totalPnlCaptionEl) {
+      totalPnlCaptionEl.textContent = totalPnlPct == null ? '–' : formatSignedPercent(totalPnlPct);
+    }
+    setMetricTone(
+      totalPnlTile,
+      totalPnl == null ? null : totalPnl > 0 ? 'profit' : totalPnl < 0 ? 'loss' : null
+    );
+  }
+
+  // Account size tile caption:
+  //  - funded: daily start (from server-enriched state)
+  //  - live: current broker balance (accountSize already reflects DOM here)
+  if (accountSizeEl) accountSizeEl.textContent = accountSize > 0 ? `$${formatCurrency(accountSize)}` : '–';
+  if (accountSizeCaptionEl) {
+    if (
+      accountMode === 'funded' &&
+      startingEquity > 0 &&
+      Math.abs(startingEquity - accountSize) >= 0.01
+    ) {
+      accountSizeCaptionEl.textContent = `Daily start $${formatCurrency(startingEquity)}`;
+    } else if (equity > 0) {
+      accountSizeCaptionEl.textContent = `Balance $${formatCurrency(equity)}`;
+    } else {
+      accountSizeCaptionEl.textContent = 'Starting balance';
+    }
+  }
+
+  // Max total loss: show REMAINING drawdown capacity + remaining % of challenge size as caption.
+  const maxTotal = resolveRuleLimit({
+    enabled: config?.maxTotalLossEnabled === true,
+    type: config?.maxTotalLossType,
+    pct: config?.maxTotalLossPct,
+    amount: config?.maxTotalLossAmount,
+    baseline: accountSize
+  });
+  const currentTotalDrawdown =
+    accountSize > 0 && equity > 0 ? Math.max(0, accountSize - equity) : 0;
+  const maxTotalRemaining = Math.max(0, maxTotal.amount - currentTotalDrawdown);
+  const maxTotalRemainingPct =
+    accountSize > 0 && maxTotal.amount > 0 ? (maxTotalRemaining / accountSize) * 100 : 0;
+  if (maxTotalLossEl) {
+    maxTotalLossEl.textContent = maxTotal.amount > 0 ? `$${formatCurrency(maxTotalRemaining)}` : 'Off';
+  }
+  if (maxTotalLossCaptionEl) {
+    maxTotalLossCaptionEl.textContent =
+      maxTotal.amount > 0 ? `${maxTotalRemainingPct.toFixed(2)}% loss allowed` : 'Rule not enabled';
+  }
+  setMetricTone(maxTotalLossTile, maxTotal.amount > 0 && maxTotalRemaining <= 0 ? 'loss' : null);
+
+  // Daily loss: show REMAINING daily capacity + remaining % of daily start as caption.
+  // Percent rules resolve against today's starting balance so the headline scales
+  // with the user-declared balance (same baseline the caption percentage uses).
+  const dailyBaseline = startingEquity > 0 ? startingEquity : accountSize;
+  const dailyRule = resolveRuleLimit({
+    enabled: config?.dailyLossRuleEnabled !== false,
+    type: config?.dailyLossLimitType,
+    pct: config?.dailyLossLimitPct,
+    amount: config?.dailyLossLimitAmount,
+    baseline: dailyBaseline
+  });
+  const dailyLimitAmount =
+    dailyRule.amount > 0 ? dailyRule.amount : Number(metrics.dailyLossLimitAmount) || 0;
+  const dailyRemaining = Math.max(0, dailyLimitAmount - floatingLoss);
+  const dailyRemainingPct =
+    dailyBaseline > 0 && dailyLimitAmount > 0 ? (dailyRemaining / dailyBaseline) * 100 : 0;
+  if (dailyLossLimitEl) {
+    dailyLossLimitEl.textContent = dailyLimitAmount > 0 ? `$${formatCurrency(dailyRemaining)}` : 'Off';
+  }
+  if (dailyLossCaptionEl) {
+    dailyLossCaptionEl.textContent =
+      dailyLimitAmount > 0 ? `${dailyRemainingPct.toFixed(2)}% loss allowed` : 'Rule not configured';
+  }
+  setMetricTone(dailyLossTile, dailyLimitAmount > 0 && dailyRemaining <= 0 ? 'loss' : null);
+
+  // Progress bar: today's loss vs daily limit.
+  if (progressWrap && progressBar && dailyLimitAmount > 0) {
     progressWrap.style.display = '';
-    const pct = Math.min(100, (loss / limit) * 100);
+    const pct = Math.min(100, (floatingLoss / dailyLimitAmount) * 100);
     progressBar.style.width = `${pct}%`;
     progressWrap.classList.remove('tg-progress-warn', 'tg-progress-danger');
     if (pct >= 100) progressWrap.classList.add('tg-progress-danger');
@@ -195,87 +350,134 @@ function toggleTotalLossTypeVisibility(type) {
   }
 }
 
+function buildRuleFieldsForDisplay(template, instance) {
+  const raw = Array.isArray(template?.definition?.fields) ? template.definition.fields : [];
+  const cfg =
+    instance?.config && typeof instance.config === 'object' && !Array.isArray(instance.config)
+      ? instance.config
+      : {};
+  return raw.map((f) => ({
+    ...f,
+    displayValue: Object.prototype.hasOwnProperty.call(cfg, f.key) ? cfg[f.key] : f.value
+  }));
+}
+
+function formatRuleFieldValue(field, value) {
+  if (field.type === 'toggle') {
+    return value === true || value === 'true' ? 'On' : 'Off';
+  }
+  if (value === '' || value == null) return '—';
+  const s = String(value);
+  const pre = field.prefix || '';
+  const suf = field.suffix || '';
+  return `${pre}${s}${suf}`;
+}
+
 /**
- * Build the list of all configurable rules with current values.
+ * Rules tab: render user-service bundle (templates + instances) like the dashboard catalog.
  */
-function renderRulesList(config, metrics) {
+function renderRulesFromApi(rulesBundle) {
   const listEl = document.getElementById('tg-rules-list');
+  const metaEl = document.getElementById('tg-rules-api-meta');
   if (!listEl) return;
 
-  const c = config || {};
-  const dailyLossOn = c.dailyLossRuleEnabled !== false;
-  const accountSize = Number(c.accountSize) || 50000;
-  const dailyType = c.dailyLossLimitType === 'amount' ? 'amount' : 'percent';
-  const dailyPct = Number(c.dailyLossLimitPct) || 5;
-  const dailyAmount = Number(c.dailyLossLimitAmount) || 2500;
-  const warnPct = Number(c.warningThresholdPct) || 80;
-  const hedgingOn = c.hedgingEnabled !== false;
-  const dailyLimitAmount =
-    dailyType === 'amount' ? dailyAmount : (accountSize * dailyPct) / 100;
-
-  const rules = [
-    {
-      title: 'Daily loss protection',
-      desc: 'Block new trades when floating loss reaches the daily limit; warn when loss reaches the warning % of that limit.',
-      value: dailyLossOn
-        ? `On — ${dailyType === 'amount' ? `Limit $${formatCurrency(dailyLimitAmount)}` : `Account $${formatCurrency(accountSize)}, limit ${dailyPct}%`}, warn at ${warnPct}%`
-        : 'Off'
-    },
-    {
-      title: 'Hedging prevention',
-      desc: 'Block opening an opposite position on the same symbol (e.g. no Sell if you have an open Buy on that pair).',
-      value: hedgingOn ? 'On' : 'Off'
-    },
-    {
-      title: 'Risk per trade',
-      desc: 'Block trades whose risk (|Entry − SL| × Volume) exceeds the configured % of balance; also block if lot size exceeds max allowed.',
-      value:
-        c.riskPerTradeEnabled === true
-          ? `On — Max ${c.riskPerTradePercent ?? 1}% of balance per trade`
-          : 'Off'
-    },
-    {
-      title: 'Max total loss',
-      desc: 'Block new trades when total loss from starting equity exceeds the configured amount or %.',
-      value:
-        c.maxTotalLossEnabled === true
-          ? `On — ${c.maxTotalLossType === 'amount' ? `$${formatCurrency(c.maxTotalLossAmount)}` : `${c.maxTotalLossPct}%`}`
-          : 'Off'
-    },
-    {
-      title: 'Stacking (max open positions)',
-      desc: 'Prompt/block when number of open positions reaches the limit.',
-      value:
-        c.maxStackingTradesEnabled === true
-          ? `On — Max ${c.maxStackingTrades} positions`
-          : 'Off'
-    },
-    {
-      title: 'Max trades per day',
-      desc: 'Block new trades after N trades opened today.',
-      value:
-        c.maxTradesPerDayEnabled === true
-          ? `On — Max ${c.maxTradesPerDay} per day`
-          : 'Off'
-    },
-    {
-      title: 'Close day after N losses',
-      desc: 'Block new trades after N closed losing trades today.',
-      value:
-        c.closeDayOnLossCountEnabled === true
-          ? `On — After ${c.closeDayOnLossCount} loss(es)`
-          : 'Off'
+  if (metaEl) {
+    if (!rulesBundle || typeof rulesBundle !== 'object') {
+      metaEl.innerHTML = `
+        <div class="tg-rules-api-meta-inner tg-rules-api-meta-empty">
+          No API snapshot yet. Close and reopen the popup, or wait a few seconds after linking — rules sync in the background.
+        </div>
+      `;
+    } else {
+      const plan = escapeHtml(rulesBundle.planSlug ?? '—');
+      const maxR = rulesBundle.maxRules != null ? escapeHtml(String(rulesBundle.maxRules)) : '—';
+      const tmpl = Array.isArray(rulesBundle.templates) ? rulesBundle.templates.length : 0;
+      const inst = Array.isArray(rulesBundle.instances) ? rulesBundle.instances.length : 0;
+      const enabled = Array.isArray(rulesBundle.instances)
+        ? rulesBundle.instances.filter((i) => i.enabled !== false).length
+        : 0;
+      metaEl.innerHTML = `
+        <div class="tg-rules-api-meta-inner">
+          <div class="tg-rules-api-meta-row">
+            <span class="tg-rules-api-meta-k">Plan</span>
+            <span class="tg-rules-api-meta-v">${plan}</span>
+          </div>
+          <div class="tg-rules-api-meta-row">
+            <span class="tg-rules-api-meta-k">Max rules</span>
+            <span class="tg-rules-api-meta-v">${maxR}</span>
+          </div>
+          <div class="tg-rules-api-meta-row">
+            <span class="tg-rules-api-meta-k">Catalog</span>
+            <span class="tg-rules-api-meta-v">${tmpl} templates</span>
+          </div>
+          <div class="tg-rules-api-meta-row">
+            <span class="tg-rules-api-meta-k">Saved</span>
+            <span class="tg-rules-api-meta-v">${inst} instance(s) · ${enabled} enabled</span>
+          </div>
+        </div>
+      `;
     }
-  ];
+  }
 
   listEl.innerHTML = '';
-  rules.forEach((rule) => {
+
+  if (!rulesBundle || !Array.isArray(rulesBundle.templates) || rulesBundle.templates.length === 0) {
     const li = document.createElement('li');
-    li.className = 'tg-rule-item';
+    li.className = 'tg-rule-item tg-rule-item-empty';
+    li.textContent = 'When the API returns templates, each rule appears here with slug, saved state, and field values.';
+    listEl.appendChild(li);
+    return;
+  }
+
+  const instanceBySlug = new Map(
+    (Array.isArray(rulesBundle.instances) ? rulesBundle.instances : []).map((i) => [
+      i.templateSlug,
+      i
+    ])
+  );
+
+  const sorted = [...rulesBundle.templates].sort(
+    (a, b) => (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0) || String(a.slug).localeCompare(String(b.slug))
+  );
+
+  sorted.forEach((t) => {
+    const slug = t.slug || '—';
+    const inst = instanceBySlug.get(slug);
+    const hasSaved = Boolean(inst);
+    const eligible = t.eligible !== false;
+
+    let statusClass = 'tg-rule-api-badge-muted';
+    let statusLabel = 'Not saved';
+    if (!eligible) {
+      statusClass = 'tg-rule-api-badge-locked';
+      statusLabel = 'Plan';
+    } else if (hasSaved) {
+      statusClass = inst.enabled !== false ? 'tg-rule-api-badge-on' : 'tg-rule-api-badge-off';
+      statusLabel = inst.enabled !== false ? 'Saved · on' : 'Saved · off';
+    }
+
+    const fields = buildRuleFieldsForDisplay(t, inst);
+    const fieldsHtml = fields.length
+      ? fields
+          .map((f) => {
+            const v = formatRuleFieldValue(f, f.displayValue);
+            return `<div class="tg-rule-api-field"><span class="tg-rule-api-field-k">${escapeHtml(f.label || f.key)}</span><span class="tg-rule-api-field-v">${escapeHtml(v)}</span></div>`;
+          })
+          .join('')
+      : '<div class="tg-rule-api-field tg-rule-api-field-note">No fields in template definition</div>';
+
+    const li = document.createElement('li');
+    li.className = 'tg-rule-item tg-rule-api-card';
     li.innerHTML = `
-      <div class="tg-rule-item-title">${rule.title}</div>
-      <div class="tg-rule-item-desc">${rule.desc}</div>
-      <div class="tg-rule-item-value">Current: ${rule.value}</div>
+      <div class="tg-rule-api-card-top">
+        <div class="tg-rule-api-card-titles">
+          <div class="tg-rule-item-title">${escapeHtml(t.name || slug)}</div>
+          <div class="tg-rule-api-slug">${escapeHtml(slug)}</div>
+        </div>
+        <span class="tg-rule-api-badge ${statusClass}">${escapeHtml(statusLabel)}</span>
+      </div>
+      <div class="tg-rule-item-desc">${escapeHtml(t.description || '')}</div>
+      <div class="tg-rule-api-fields">${fieldsHtml}</div>
     `;
     listEl.appendChild(li);
   });
@@ -669,21 +871,227 @@ async function runMappingDiagnostics() {
   }
 }
 
+async function refreshPairingUi() {
+  const st = await sendMessage({ type: 'TG_GET_PAIRING_STATE' });
+  const elAccountId = document.getElementById('tg-pairing-account-id');
+  if (elAccountId) elAccountId.textContent = st?.tradingAccountId || '–';
+
+  const brokerHost = st?.brokerHost || null;
+  const accountKind = st?.accountKind === 'funded' ? 'funded' : 'live';
+  const mappingApproved = Boolean(st?.mappingApproved);
+  const role = st?.role === 'admin' ? 'admin' : 'user';
+
+  const hostEl = document.getElementById('tg-pairing-broker-host');
+  if (hostEl) hostEl.textContent = brokerHost || '–';
+
+  const kindEl = document.getElementById('tg-pairing-account-kind');
+  if (kindEl) kindEl.textContent = accountKind;
+
+  const mapStatusEl = document.getElementById('tg-pairing-mapping-status');
+  if (mapStatusEl) {
+    mapStatusEl.textContent = brokerHost
+      ? mappingApproved
+        ? `Mapping status: approved for ${accountKind}`
+        : `Mapping status: not yet approved for ${accountKind}`
+      : 'Mapping status: no broker host bound';
+  }
+
+  const { host: activeHost } = await getActiveTabInfo();
+  const onCorrectHost = brokerHost && activeHost && activeHost.toLowerCase() === brokerHost.toLowerCase();
+
+  const wrongHostEl = document.getElementById('tg-pairing-wrong-host');
+  if (wrongHostEl) {
+    if (brokerHost && !onCorrectHost) wrongHostEl.classList.remove('tg-field-hidden');
+    else wrongHostEl.classList.add('tg-field-hidden');
+  }
+
+  const mapBtn = document.getElementById('tg-map-platform');
+  const mapKindWrap = document.getElementById('tg-map-kind-wrap');
+  const mapKindSelect = document.getElementById('tg-map-kind');
+
+  const canMap = role === 'admin' && onCorrectHost && !mappingApproved;
+  if (mapBtn) {
+    if (role === 'admin') {
+      mapBtn.classList.remove('tg-field-hidden');
+      mapBtn.disabled = !onCorrectHost;
+      mapBtn.title = onCorrectHost
+        ? mappingApproved
+          ? 'Mapping already approved — re-mapping will create a new pending draft'
+          : 'Start field mapping on the current tab’s host'
+        : 'Switch to the broker tab to map this host';
+    } else {
+      // Non-admins cannot map. Hide the button entirely.
+      mapBtn.classList.add('tg-field-hidden');
+    }
+  }
+  if (mapKindWrap) {
+    if (role === 'admin' && onCorrectHost) {
+      mapKindWrap.classList.remove('tg-field-hidden');
+      if (mapKindSelect && !mapKindSelect.dataset.tgxKindBound) {
+        mapKindSelect.value = accountKind;
+      }
+    } else {
+      mapKindWrap.classList.add('tg-field-hidden');
+    }
+  }
+
+  // Expose to mapping button handler via dataset for one-shot reads.
+  const root = document.getElementById('tg-root');
+  if (root) {
+    root.dataset.tgxRole = role;
+    root.dataset.tgxCanMap = canMap ? '1' : '0';
+    root.dataset.tgxBrokerHost = brokerHost || '';
+    root.dataset.tgxAccountKind = accountKind;
+  }
+
+  // Mapping debug panel is admin-only — it hosts Remap host / Diagnostics
+  // which both can trigger the manual mapping overlay on the broker tab.
+  const debugPanel = document.getElementById('tg-mapping-debug-panel');
+  if (debugPanel) {
+    if (role === 'admin') debugPanel.classList.remove('tg-field-hidden');
+    else debugPanel.classList.add('tg-field-hidden');
+  }
+}
+
+function formatFundedMoney(value, currency) {
+  if (!Number.isFinite(value)) return '–';
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency: currency || 'USD',
+      maximumFractionDigits: 2
+    }).format(value);
+  } catch (_e) {
+    return `${currency || '$'}${value.toFixed(2)}`;
+  }
+}
+
+async function refreshFundedSection() {
+  const section = document.getElementById('tg-funded-section');
+  if (!section) return;
+  const resp = await sendMessage({ type: 'TG_GET_ACCOUNT_CONFIG' });
+  const account = resp?.account || null;
+  if (!account || account.equityMode !== 'funded') {
+    section.classList.add('tg-field-hidden');
+    return;
+  }
+  section.classList.remove('tg-field-hidden');
+  const currency = account.currency || 'USD';
+  const dailyStart = Number(account.dailyStartingBalance);
+  const closedPnl = Number(resp?.closedPnlToday) || 0;
+  const computed = Number.isFinite(dailyStart) ? dailyStart + closedPnl : NaN;
+
+  const startEl = document.getElementById('tg-funded-daily-start');
+  const computedEl = document.getElementById('tg-funded-computed');
+  const closedPnlEl = document.getElementById('tg-funded-closed-pnl');
+  const metaEl = document.getElementById('tg-funded-meta');
+  const dashLink = document.getElementById('tg-funded-dashboard');
+
+  if (startEl) startEl.textContent = formatFundedMoney(dailyStart, currency);
+  if (computedEl) computedEl.textContent = formatFundedMoney(computed, currency);
+  if (closedPnlEl) {
+    const sign = closedPnl >= 0 ? '+' : '−';
+    closedPnlEl.textContent = `${sign}${formatFundedMoney(Math.abs(closedPnl), currency)}`;
+  }
+  if (metaEl) {
+    const firmName = account.propFirmName || account.propFirmSlug || 'Funded account';
+    const lastRec = account.lastReconciledAt
+      ? new Date(account.lastReconciledAt).toLocaleString()
+      : 'never';
+    metaEl.textContent = `${firmName} · last reconciled: ${lastRec}`;
+  }
+  if (dashLink) {
+    if (account.dashboardUrl) {
+      dashLink.href = account.dashboardUrl;
+      dashLink.classList.remove('tg-field-hidden');
+    } else {
+      dashLink.classList.add('tg-field-hidden');
+    }
+  }
+  // Stash for the adjust handler so it has fresh closedPnlToday context.
+  section.dataset.tgxClosedPnl = String(closedPnl);
+  section.dataset.tgxCurrency = currency;
+}
+
+function setupAdjustBalanceHandler() {
+  const btn = document.getElementById('tg-adjust-balance');
+  const form = document.getElementById('tg-adjust-balance-form');
+  const cancel = document.getElementById('tg-adjust-balance-cancel');
+  const input = document.getElementById('tg-adjust-balance-input');
+  const errorEl = document.getElementById('tg-adjust-balance-error');
+  const section = document.getElementById('tg-funded-section');
+  if (!btn || !form || !input || btn.dataset.tgxBound === '1') return;
+  btn.dataset.tgxBound = '1';
+
+  const showError = (msg) => {
+    if (!errorEl) return;
+    errorEl.textContent = msg;
+    errorEl.classList.remove('tg-field-hidden');
+  };
+  const hideError = () => {
+    if (!errorEl) return;
+    errorEl.classList.add('tg-field-hidden');
+    errorEl.textContent = '';
+  };
+  const closeForm = () => {
+    form.classList.add('tg-field-hidden');
+    btn.classList.remove('tg-field-hidden');
+    hideError();
+    input.value = '';
+  };
+
+  btn.addEventListener('click', () => {
+    btn.classList.add('tg-field-hidden');
+    form.classList.remove('tg-field-hidden');
+    hideError();
+    input.focus();
+  });
+  if (cancel) cancel.addEventListener('click', closeForm);
+  input.addEventListener('input', hideError);
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const declaredBalance = Number(input.value.trim());
+    if (!Number.isFinite(declaredBalance) || declaredBalance <= 0) {
+      showError('Enter the balance shown on your prop firm dashboard.');
+      input.focus();
+      return;
+    }
+    const closedPnlToday = Number(section?.dataset.tgxClosedPnl);
+    const payload = { declaredBalance };
+    if (Number.isFinite(closedPnlToday)) payload.closedPnlToday = closedPnlToday;
+    const resp = await sendMessage({ type: 'TG_RECONCILE_ACCOUNT', payload });
+    if (!resp?.success) {
+      showError(resp?.error || 'Could not save. Try again.');
+      return;
+    }
+    closeForm();
+    setStatus('Balance updated', 'neutral');
+    refreshFundedSection();
+  });
+}
+
 async function loadState(refreshOnly = false) {
   if (!refreshOnly) setStatus('Loading…', 'neutral');
-  const state = await sendMessage({ type: 'TG_GET_POPUP_STATE' });
+  const [state, accountResp] = await Promise.all([
+    sendMessage({ type: 'TG_GET_POPUP_STATE' }),
+    sendMessage({ type: 'TG_GET_ACCOUNT_CONFIG' })
+  ]);
   if (!state) {
     if (!refreshOnly) setStatus('Unable to load state', 'error');
     return;
   }
 
-  renderMetrics(state.metrics);
+  const accountMode = accountResp?.account?.equityMode || null;
+  renderMetrics(state.metrics, state.config, accountMode);
   if (!refreshOnly) renderConfig(state.config);
-  renderRulesList(state.config, state.metrics);
+  renderRulesFromApi(state.rulesBundle);
   renderSession(state.session || {});
   renderOverviewTradeSummary(state.activeTrades, state.lastTrade);
   renderPositionsList(state.activeTrades, state.metrics, state.config);
   renderTerminal(state.lastHooked);
+  await refreshPairingUi();
+  await refreshFundedSection();
 
   if (!refreshOnly) setStatus('Ready', 'neutral');
 }
@@ -745,6 +1153,7 @@ async function saveConfigToStorage() {
   return result?.success === true;
 }
 
+/** Local rule form is hidden while linked; kept for future offline mode. */
 function setupConfigForm() {
   const dailyTypeEl = document.getElementById('tg-input-daily-loss-type');
   const totalLossTypeEl = document.getElementById('tg-input-max-total-loss-type');
@@ -786,13 +1195,118 @@ function setupConfigForm() {
   });
 }
 
-function initApp() {
-  setupTabs();
-  setupConfigForm();
+let popupRefreshInterval = null;
+
+function clearPopupRefreshInterval() {
+  if (popupRefreshInterval != null) {
+    clearInterval(popupRefreshInterval);
+    popupRefreshInterval = null;
+  }
+}
+
+function showPairingGate() {
+  const gate = document.getElementById('tg-pairing-gate');
+  const app = document.getElementById('tg-app');
+  const root = document.getElementById('tg-root');
+  clearPopupRefreshInterval();
+  gate?.classList.remove('tg-field-hidden');
+  app?.classList.add('tg-field-hidden');
+  root?.classList.remove('tg-paired');
+}
+
+function showMainApp() {
+  const gate = document.getElementById('tg-pairing-gate');
+  const app = document.getElementById('tg-app');
+  const root = document.getElementById('tg-root');
+  gate?.classList.add('tg-field-hidden');
+  app?.classList.remove('tg-field-hidden');
+  root?.classList.add('tg-paired');
+}
+
+function setupPairingGateForm() {
+  const submit = document.getElementById('tg-pairing-submit');
+  const codeInput = document.getElementById('tg-pairing-code');
+  const errEl = document.getElementById('tg-pairing-error');
+  if (!submit || !codeInput || submit.dataset.tgxPairingBound === '1') return;
+  submit.dataset.tgxPairingBound = '1';
+
+  submit.addEventListener('click', async () => {
+    const code = codeInput.value.trim();
+    if (!code) {
+      if (errEl) {
+        errEl.textContent = 'Enter the code from the web app.';
+        errEl.classList.remove('tg-field-hidden');
+      }
+      return;
+    }
+    if (errEl) errEl.classList.add('tg-field-hidden');
+    setStatus('Linking…', 'neutral');
+    const res = await sendMessage({ type: 'TG_PAIRING_EXCHANGE', payload: { code } });
+    if (res?.success) {
+      codeInput.value = '';
+      if (res.rulesSync && res.rulesSync.success === false) {
+        setStatus(`Linked (rules sync: ${res.rulesSync.error || 'skipped'})`, 'neutral');
+      } else {
+        setStatus('Linked — rules loaded from dashboard', 'neutral');
+      }
+      showMainApp();
+      await initApp();
+    } else {
+      if (errEl) {
+        errEl.textContent = res?.error || 'Pairing failed. Check the code and try again.';
+        errEl.classList.remove('tg-field-hidden');
+      }
+      setStatus('Pairing failed', 'error');
+    }
+  });
+}
+
+function setupDisconnectHandler() {
+  const disconnect = document.getElementById('tg-pairing-disconnect');
+  if (!disconnect || disconnect.dataset.tgxDisconnectBound === '1') return;
+  disconnect.dataset.tgxDisconnectBound = '1';
+  disconnect.addEventListener('click', async () => {
+    setStatus('Disconnecting…', 'neutral');
+    await sendMessage({ type: 'TG_PAIRING_DISCONNECT' });
+    setStatus('Disconnected', 'neutral');
+    showPairingGate();
+    const errEl = document.getElementById('tg-pairing-error');
+    if (errEl) {
+      errEl.classList.add('tg-field-hidden');
+      errEl.textContent = '';
+    }
+  });
+}
+
+async function initApp() {
+  const root = document.getElementById('tg-root');
+  const wireMainUi = root?.dataset.tgxMainWired !== '1';
+  if (wireMainUi) {
+    if (root) root.dataset.tgxMainWired = '1';
+    setupTabs();
+    setupDisconnectHandler();
+    setupAdjustBalanceHandler();
+  }
+  await sendMessage({ type: 'TG_SYNC_RULES_FROM_SERVER' });
   const mapBtn = document.getElementById('tg-map-platform');
-  if (mapBtn) {
+  if (wireMainUi && mapBtn) {
     mapBtn.addEventListener('click', async () => {
-      setStatus('Starting mapping…', 'neutral');
+      const root = document.getElementById('tg-root');
+      if (root?.dataset.tgxRole !== 'admin') {
+        setStatus('Only admins can map brokers', 'error');
+        return;
+      }
+      if (root?.dataset.tgxCanMap !== '1') {
+        setStatus('Switch to the bound broker tab before mapping', 'error');
+        return;
+      }
+      const kindSelect = document.getElementById('tg-map-kind');
+      const chosenKind = kindSelect?.value === 'funded' ? 'funded' : 'live';
+      await sendMessage({
+        type: 'TG_SET_PENDING_MAPPING_KIND',
+        payload: { accountKind: chosenKind },
+      });
+      setStatus(`Starting mapping (${chosenKind})…`, 'neutral');
       let res = await startMappingOnActiveTab();
       // Fallback through background relay if direct tab message fails.
       if (!res?.success) {
@@ -810,9 +1324,20 @@ function initApp() {
     });
   }
   const remapBtn = document.getElementById('tg-remap-host');
-  if (remapBtn) {
+  if (wireMainUi && remapBtn) {
     remapBtn.addEventListener('click', async () => {
-      setStatus('Starting remap…', 'neutral');
+      const root = document.getElementById('tg-root');
+      if (root?.dataset.tgxRole !== 'admin') {
+        setStatus('Only admins can remap brokers', 'error');
+        return;
+      }
+      const kindSelect = document.getElementById('tg-map-kind');
+      const chosenKind = kindSelect?.value === 'funded' ? 'funded' : 'live';
+      await sendMessage({
+        type: 'TG_SET_PENDING_MAPPING_KIND',
+        payload: { accountKind: chosenKind },
+      });
+      setStatus(`Starting remap (${chosenKind})…`, 'neutral');
       let res = await startMappingOnActiveTab();
       if (!res?.success) {
         res = await sendMessage({ type: 'TG_START_PLATFORM_MAPPING' });
@@ -828,19 +1353,19 @@ function initApp() {
     });
   }
   const showHostsBtn = document.getElementById('tg-show-saved-hosts');
-  if (showHostsBtn) {
+  if (wireMainUi && showHostsBtn) {
     showHostsBtn.addEventListener('click', () => {
       showSavedHostsSummary();
     });
   }
   const runDiagBtn = document.getElementById('tg-run-mapping-diagnostics');
-  if (runDiagBtn) {
+  if (wireMainUi && runDiagBtn) {
     runDiagBtn.addEventListener('click', () => {
       runMappingDiagnostics();
     });
   }
   const clearBtn = document.getElementById('tg-clear-state');
-  if (clearBtn) {
+  if (wireMainUi && clearBtn) {
     clearBtn.addEventListener('click', async () => {
       const ok = await sendMessage({ type: 'TG_CLEAR_STATE' });
       if (ok?.success) {
@@ -853,14 +1378,42 @@ function initApp() {
   }
   loadState();
   refreshMappingDebugStatus();
-  setInterval(() => {
+  clearPopupRefreshInterval();
+  popupRefreshInterval = setInterval(() => {
+    const app = document.getElementById('tg-app');
+    if (!app || app.classList.contains('tg-field-hidden')) return;
     loadState(true);
     refreshMappingDebugStatus();
   }, 2000);
+
+  // Push-based refresh: background fires these after pairing exchange and
+  // after refreshAccountConfig finishes. Without this the popup would only
+  // pick up new account data on its 2s poll, and the form values that
+  // loadState(true) skips wouldn't render until a hard refresh.
+  if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage && !window.__tgxPopupListenerBound) {
+    window.__tgxPopupListenerBound = true;
+    chrome.runtime.onMessage.addListener((message) => {
+      if (message?.type === 'TG_PAIRING_CHANGED' || message?.type === 'TG_ACCOUNT_REFRESHED') {
+        loadState();
+        refreshMappingDebugStatus();
+      }
+      return undefined;
+    });
+  }
+}
+
+async function bootstrapPopup() {
+  const st = await sendMessage({ type: 'TG_GET_PAIRING_STATE' });
+  if (st?.connected) {
+    showMainApp();
+    await initApp();
+  } else {
+    showPairingGate();
+    setupPairingGateForm();
+  }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Auth is disabled for now; always show the main app.
-  initApp();
+  bootstrapPopup();
 });
 

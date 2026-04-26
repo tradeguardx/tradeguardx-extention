@@ -252,28 +252,7 @@ This mode ensures that once a broker is mapped, TradeGuardX:
 
 Initialization (mapping + tracker wiring):
 
-```62:81:src/content/tradeMonitor.js
-async init() {
-  if (!this.detector) return;
-  this._attachRuntimeHandlers();
-  await this.loadSavedOrderIdentity();
-  if (window.OrderTableTracker && !this._orderTracker) {
-    this._orderTracker = new window.OrderTableTracker(this.detector, {
-      host: window.location.hostname
-    });
-    if (this._loadedSelectors?.order_profile) {
-      this._orderTracker.importProfile(this._loadedSelectors.order_profile);
-    }
-  }
-  this._requiresMapping = !this._hasSavedMappingForHost();
-  if (this._requiresMapping) {
-    this._startMappingEligibilityWatcher();
-    return;
-  }
-  this._stopMappingEligibilityWatcher();
-  this._startMonitoringLoops();
-}
-```
+When the host is not mapped, `init()` returns after a console warning — mapping is started only from the popup (**Map this host**). When mapped, it calls `_startMonitoringLoops()` as before.
 
 Monitoring loop entry:
 

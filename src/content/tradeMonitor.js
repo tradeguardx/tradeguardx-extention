@@ -1,4 +1,4 @@
-/* global chrome, showWarningOverlay, showNoStopLossOverlay, showBlockedTradeOverlay, showTradeClosedOverlay, showToast, flashScreen */
+/* global chrome, showWarningOverlay, showNoStopLossOverlay, showBlockedTradeOverlay, showTradeClosedOverlay, showToast, flashScreen, TradeGuardXPositionSource, TradeGuardXPositionState, TradeGuardXPositionTransitions, TradeGuardXMappingQuality, TradeGuardXMappingStore */
 
 function debounce(func, wait) {
   let timeout;
@@ -6,6 +6,48 @@ function debounce(func, wait) {
     clearTimeout(timeout);
     timeout = setTimeout(() => func.apply(this, args), wait);
   };
+}
+
+/** DevTools: filter by `TradeGuardX` — uses console.log so “Default levels” always shows it. */
+function tgHedgingLog(phase, payload) {
+  try {
+    console.log('[TradeGuardX][Hedging]', phase, payload !== undefined ? payload : '');
+  } catch (_e) {
+    /* ignore */
+  }
+}
+
+/** Host suffixes where the content script may run but no broker mapping is expected (quiet console). */
+const _TG_NON_BROKER_HOST_SUFFIXES = [
+  'localhost',
+  '127.0.0.1',
+  'amazonaws.com',
+  'cursor.com',
+  'authenticator.cursor.sh',
+  'accounts.google.com',
+  'claude.ai',
+  'anthropic.com',
+  'openai.com',
+  'chatgpt.com',
+  'notion.so',
+  'notion.site',
+  'tradezella.com'
+];
+
+/** Hosts where we skip the loud “no mapping” warning (tools, not broker terminals). */
+function _tgSkipNoMappingConsoleWarn(host) {
+  const h = String(host || '').toLowerCase();
+  if (
+    /jsonformatter|curiousconcept\.com$|^(www\.)?google\.|^github\.com$|stackoverflow\.com$|^s3[.-]|^cdn\.|^assets\./i.test(h)
+  ) {
+    return true;
+  }
+  if (/^localhost(?::\d+)?$/.test(h) || /^127\.0\.0\.1(?::\d+)?$/.test(h)) return true;
+  if (h.includes('journal-media.s3.') || h.includes('.s3.') || h.endsWith('.amazonaws.com')) return true;
+  for (const suf of _TG_NON_BROKER_HOST_SUFFIXES) {
+    if (h === suf || h.endsWith('.' + suf)) return true;
+  }
+  return false;
 }
 
 /**
@@ -25,6 +67,10 @@ class TradeMonitor {
       positions: [] // activeTrades: [{ symbol, side, element? }]
     };
     this.slTpReminderId = null;
+    /** First SL reminder fires after rule delay; avoids spam when refreshAccountState runs often. */
+    this._slTpFirstTimeoutId = null;
+    /** When set, reminder timers match this key — skip rescheduling if unchanged. */
+    this._slTpScheduleKey = null;
     this.hooked = false;
     this._scanIntervalId = null;
     this._observer = null;
@@ -46,22 +92,63 @@ class TradeMonitor {
     this._lastNonEmptyTradesAt = 0;
     this._messageHandler = null;
     this._mappingSession = null;
-    this._autoMappingChecked = false;
-    this._autoRemapChecked = false;
     this._requiresMapping = false;
     this._monitoringStarted = false;
     this._mappedSelectors = null;
-    this._mappingEligibilityTimer = null;
-    this._mappingPromptedOnce = false;
     this._lastScanPositions = [];
+    /** Dedupes the trade-closed overlay when the broker UI flickers the row back briefly. */
+    this._closedPopupRecent = new Map();
     this._buyButtonEl = null;
     this._sellButtonEl = null;
     this._dailyLossAutoCloseTriggered = false;
+    /** First time we saw an open position (by stable key) — for minimum-hold rule. */
+    this._positionFirstSeenMs = new Map();
+    /** Last config from background; refreshed often for synchronous close interception. */
+    this._cachedRiskConfig = null;
+    this._minimumHoldGuardAttached = false;
+    /** Avoid noisy repeated warnings for the same host mapping diagnostics. */
+    this._mappingQualityWarnedHosts = new Set();
+    /** Journal runtime state (per open position key): uid, sequence, pending events, last snapshot. */
+    this._journalPositionState = new Map();
+    this._journalDebounceMs = 1800;
+    /** Prevent snapshot spam if OPEN/CLOSE gets retriggered rapidly for same tradeUid. */
+    this._journalLastSnapshotAt = new Map();
+    /** Funded-mode cache from background: { accountId, account, closedPnlToday, needsReconcile, fetchedAt } */
+    this._fundedAccountState = null;
+    this._fundedAccountFetchInflight = null;
+    this._fundedRefreshIntervalId = null;
+    /** Whether the extension is currently paired to an account. All user-visible
+     *  toasts/overlays must check this — when false, the content script should be
+     *  silent (no "trade closed" popup, no "rules enforced" toast, etc.). */
+    this._isPaired = false;
+    /** Post-refresh hydration gate: when we restore cached positions on init we
+     *  must not declare phantom closes until the broker DOM has had a chance to
+     *  catch up. The gate clears either when a live scan returns positions
+     *  (DOM is up) or after HYDRATION_GRACE_MS (legit closes during the refresh
+     *  gap can still fire eventually). Without this, every page refresh on a
+     *  slow-hydrating broker SPA fires a fake TG_SYNC_CLOSED_TRADE. */
+    this._cachedHydrationCount = 0;
+    this._cachedHydrationAt = 0;
+    this._domHydrationConfirmed = true;
+    /** Last tab the user explicitly clicked on (open/closed/pending). Used as the authoritative
+     *  tab-context signal because DOM active-state detection fails on brokers that style tabs
+     *  without aria/data/class markers (e.g. The Funded Room). */
+    this._lastTabClickContext = null;
+    this._tabClickListener = null;
+    /** In-memory mirror of the last persisted positions snapshot for this host.
+     *  Used to keep accountState.positions populated when the user is on the Close/History
+     *  tab (scan returns empty) so hedging checks and funded-mode equity remain correct. */
+    this._cachedPositionsSnapshot = null;
   }
 
   // Initialize message listeners, load mapping/profile, then start monitoring if host is mapped.
   async init() {
-    if (!this.detector) return;
+    if (!this.detector) {
+      console.warn(
+        '[TradeGuardX] TradeMonitor init stopped: universalDetector missing (script order issue?)'
+      );
+      return;
+    }
     this._attachRuntimeHandlers();
     await this.loadSavedOrderIdentity();
     if (window.OrderTableTracker && !this._orderTracker) {
@@ -72,13 +159,41 @@ class TradeMonitor {
         this._orderTracker.importProfile(this._loadedSelectors.order_profile);
       }
     }
-    this._requiresMapping = !this._hasSavedMappingForHost();
+    // Consider mapping present if flagged complete OR if we got any loaded selectors
+    // (e.g. restored from backend where mapping_complete may not have been stamped yet).
+    const hasMapping = this._hasSavedMappingForHost() ||
+      (this._loadedSelectors != null && typeof this._loadedSelectors === 'object' &&
+        Object.keys(this._loadedSelectors).length > 0);
+    this._requiresMapping = !hasMapping;
     if (this._requiresMapping) {
-      this._startMappingEligibilityWatcher();
+      const host = window.location.hostname;
+      const quietHost = _tgSkipNoMappingConsoleWarn(host);
+      if (!quietHost) {
+        console.warn(
+          '[TradeGuardX] No platform mapping for this site yet — Buy/Sell click hooks are NOT attached. ' +
+            'Open the extension popup and use “Map this host” when you are on the broker terminal, then reload if needed. ' +
+            `host=${host}`
+        );
+      }
       return;
     }
-    this._stopMappingEligibilityWatcher();
+    console.log(
+      '[TradeGuardX] Monitoring started (mapping present) — hedging logs appear on Buy/Sell click.',
+      window.location.hostname
+    );
+    this._loadPairingState().catch(() => {});
+    this._loadFundedAccountState().catch(() => {});
+    // Hydrate per-host position cache BEFORE the first scan so refreshed trades keep their
+    // original openedAtMs / clientTradeId (no duplicate journal OPEN on refresh) and so the
+    // first scan on the Close tab has something to show.
+    await this._hydratePositionCache();
     this._startMonitoringLoops();
+    if (!this._fundedRefreshIntervalId) {
+      this._fundedRefreshIntervalId = window.setInterval(
+        () => this._loadFundedAccountState().catch(() => {}),
+        60_000
+      );
+    }
   }
 
   _startMonitoringLoops() {
@@ -86,6 +201,15 @@ class TradeMonitor {
     this._monitoringStarted = true;
     // Kick off one scan and then keep state in sync via DOM mutations + interval polling.
     this.runFullScan();
+    // Inform background/popup that a trading UI monitor is now active for this host,
+    // so the \"active trading page\" indicator can flip immediately even before we
+    // have seen positions/equity data.
+    if (chrome?.runtime?.id && chrome.runtime.sendMessage) {
+      chrome.runtime.sendMessage({
+        type: 'TG_UI_HOOKED',
+        payload: { host: window.location.hostname, url: window.location.href, at: Date.now() }
+      });
+    }
     this._maybeAutoRemapIfUnhooked();
 
     if (document.body && !this._observer) {
@@ -111,6 +235,10 @@ class TradeMonitor {
       this._overRiskReminderId = window.setInterval(() => this.checkOverRiskReminder(), 60000);
     }
     this.attachTradeButtons();
+    this._attachMinimumHoldGuard();
+    this.getConfig().then((c) => {
+      this._cachedRiskConfig = c;
+    });
   }
 
   _hasSavedMappingForHost() {
@@ -118,86 +246,10 @@ class TradeMonitor {
     return s.mapping_complete === true;
   }
 
-  _hasChartSignals() {
-    try {
-      const chartSelector = [
-        'canvas',
-        'svg',
-        '[id*="chart"]',
-        '[class*="chart"]',
-        '[class*="tradingview"]',
-        '[data-test*="chart"]',
-        '[data-testid*="chart"]'
-      ].join(',');
-      const nodes = document.querySelectorAll(chartSelector);
-      return nodes.length >= 2;
-    } catch (_err) {
-      return false;
-    }
-  }
-
-  _isLikelyBrokerTradingPage() {
-    if (!this.detector) return false;
-    const buttons = this.detector.detectTradeButtons?.(document.body) || { buyButtons: [], sellButtons: [] };
-    const hasTradeButtons = (buttons.buyButtons?.length || 0) + (buttons.sellButtons?.length || 0) > 0;
-    const hasOrderIdentity = !!this.detector.detectOrderDetailsIdentity?.(document.body);
-    const hasChart = this._hasChartSignals();
-    return (hasTradeButtons && hasChart) || (hasTradeButtons && hasOrderIdentity);
-  }
-
-  _startMappingEligibilityWatcher() {
-    if (this._mappingEligibilityTimer) return;
-    if (!/^https?:/i.test(window.location.protocol || '')) return;
-    if (this._hasSavedMappingForHost()) return;
-
-    const tick = () => {
-      if (this._hasSavedMappingForHost()) {
-        this._requiresMapping = false;
-        this._stopMappingEligibilityWatcher();
-        return;
-      }
-      if (this._isMappingActive()) return;
-      if (!this._isLikelyBrokerTradingPage()) return;
-      if (this._mappingPromptedOnce) return;
-
-      this._mappingPromptedOnce = true;
-      this.startGuidedPlatformMapping().catch(() => {
-        // allow one retry cycle from watcher if first start fails due to SPA timing
-        this._mappingPromptedOnce = false;
-      });
-      if (typeof showToast === 'function') {
-        showToast('Broker terminal detected. Map this platform once to start detection.', 'info');
-      }
-    };
-
-    tick();
-    this._mappingEligibilityTimer = window.setInterval(tick, 2000);
-  }
-
-  _stopMappingEligibilityWatcher() {
-    if (!this._mappingEligibilityTimer) return;
-    clearInterval(this._mappingEligibilityTimer);
-    this._mappingEligibilityTimer = null;
-  }
-
   _isMappedCrawlMode() {
     const s = this._mappedSelectors || this._loadedSelectors || {};
     // Mapped-only rule: once mapping is marked complete, do not fallback to heuristics.
     return s.mapping_complete === true;
-  }
-
-  _maybeAutoStartGuidedMapping() {
-    if (this._autoMappingChecked) return;
-    this._autoMappingChecked = true;
-    if (this._hasSavedMappingForHost()) return;
-    if (!/^https?:/i.test(window.location.protocol || '')) return;
-    window.setTimeout(() => {
-      if (this._mappingSession) return;
-      this.startGuidedPlatformMapping();
-      if (typeof showToast === 'function') {
-        showToast('First time on this platform: click elements to map fields.', 'info');
-      }
-    }, 1200);
   }
 
   _maybeAutoRemapIfUnhooked() {
@@ -209,8 +261,43 @@ class TradeMonitor {
   _attachRuntimeHandlers() {
     // TG_START_PLATFORM_MAPPING is handled in content.js with a bound monitor reference.
     if (!chrome?.runtime?.id || !chrome.runtime.onMessage || this._messageHandler) return;
-    this._messageHandler = (_message, _sender, _sendResponse) => {
-      // Other message types can be handled here if needed.
+    this._messageHandler = (message, _sender, _sendResponse) => {
+      if (message?.type === 'TG_PAIRING_CHANGED') {
+        // Session flipped (new pairing or disconnect): drop cached funded state
+        // + risk config so the next trade click reads a fresh world without a
+        // page refresh. Also reset `hooked` so the "TradeGuardX active. Rules
+        // enforced." toast can fire on the next scan now that pairing is real
+        // (it was suppressed during the unpaired window).
+        this._fundedAccountState = null;
+        this._cachedRiskConfig = null;
+        this.hooked = false;
+        this._loadPairingState().catch(() => {});
+        this._loadFundedAccountState().catch(() => {});
+        this.getConfig().then((c) => { this._cachedRiskConfig = c; }).catch(() => {});
+        // Re-fetch the broker mapping too — when the user pairs to a different
+        // broker, or when the mapping wasn't cached yet at monitor construction
+        // time, the cached _loadedSelectors are stale/empty. Without this,
+        // hasMapping stays false and the monitor never enters the active loop.
+        this.loadSavedOrderIdentity()
+          .then(() => {
+            const hasMapping = this._hasSavedMappingForHost() ||
+              (this._loadedSelectors != null && typeof this._loadedSelectors === 'object' &&
+                Object.keys(this._loadedSelectors).length > 0);
+            if (hasMapping && !this._monitoringStarted) {
+              this._requiresMapping = false;
+              this._startMonitoringLoops();
+            }
+          })
+          .catch(() => {});
+        return undefined;
+      }
+      if (message?.type === 'TG_ACCOUNT_REFRESHED') {
+        // Server-side account data just arrived. Reload funded state so
+        // daily-loss / max-trades rules pick up the fresh server counters
+        // immediately — without waiting for the 60s _fundedRefreshIntervalId.
+        this._loadFundedAccountState().catch(() => {});
+        return undefined;
+      }
       return undefined;
     };
     chrome.runtime.onMessage.addListener(this._messageHandler);
@@ -258,8 +345,30 @@ class TradeMonitor {
     }
   }
 
-  _setButtonBlocked(btn, reason) {
+  /**
+   * Read instrument label from mapped order-ticket selector (preferred for hedging vs scraping nearby text).
+   */
+  _readMappedOrderInstrumentText(selector) {
+    if (!selector || typeof selector !== 'string') return null;
+    try {
+      const el = document.querySelector(selector);
+      if (!el) return null;
+      const raw = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!raw) return null;
+      if (this.detector?.getBestSymbolFromText) {
+        const sym = this.detector.getBestSymbolFromText(raw);
+        if (sym) return sym;
+      }
+      const first = raw.split(/[\s/]+/).find((t) => t && /^[A-Za-z]{2,12}/.test(t));
+      return first ? this.detector?.normalizeSymbol?.(first) || String(first).toUpperCase() : null;
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  _setButtonBlocked(btn, reason, opts = {}) {
     if (!btn || !(btn instanceof HTMLElement)) return;
+    const { symbol = null, side = null, ruleSlug = 'hedging' } = opts || {};
     btn.dataset.tgBlocked = 'true';
     btn.dataset.tgBlockedReason = reason || '';
     btn.disabled = true;
@@ -269,6 +378,13 @@ class TradeMonitor {
     btn.__tgBlockHandler = (e) => {
       e.preventDefault();
       e.stopPropagation();
+      this._journalEmitRuleBlock({
+        side,
+        symbol,
+        reason: reason || 'Hedging prevention',
+        title: 'Hedging blocked',
+        ruleSlug
+      });
       this.showBlockedReason(
         reason ||
           'Hedging is disabled. Opposite-side trades on the same instrument are blocked by your rules.',
@@ -338,6 +454,42 @@ class TradeMonitor {
     return s;
   }
 
+  _normalizeMappedSelectorPayload(selectors) {
+    const src = selectors && typeof selectors === 'object' ? selectors : {};
+    const out = { ...src };
+    const normalizeTopLevel = (key, field) => {
+      if (typeof out[key] !== 'string' || !out[key]) return;
+      out[key] = this._normalizeAiSelector(out[key], field);
+    };
+    normalizeTopLevel('buy_button', 'buyButtonSelector');
+    normalizeTopLevel('sell_button', 'sellButtonSelector');
+    normalizeTopLevel('order_instrument', 'orderInstrumentSelector');
+    normalizeTopLevel('open_positions_tab', 'openTabSelector');
+    normalizeTopLevel('pending_positions_tab', 'pendingTabSelector');
+    normalizeTopLevel('closed_positions_tab', 'closedTabSelector');
+    normalizeTopLevel('closed_trades_section', 'closedTradesContainerSelector');
+
+    if (out.order_details_identity && typeof out.order_details_identity === 'object') {
+      const odi = { ...out.order_details_identity };
+      if (odi.fieldSelectors && typeof odi.fieldSelectors === 'object') {
+        const fs = { ...odi.fieldSelectors };
+        if (typeof fs.buyButton === 'string') fs.buyButton = this._normalizeAiSelector(fs.buyButton, 'buyButtonSelector');
+        if (typeof fs.sellButton === 'string') fs.sellButton = this._normalizeAiSelector(fs.sellButton, 'sellButtonSelector');
+        if (typeof fs.orderInstrument === 'string') fs.orderInstrument = this._normalizeAiSelector(fs.orderInstrument, 'orderInstrumentSelector');
+        odi.fieldSelectors = fs;
+      }
+      if (odi.absoluteFieldSelectors && typeof odi.absoluteFieldSelectors === 'object') {
+        const afs = { ...odi.absoluteFieldSelectors };
+        if (typeof afs.buyButton === 'string') afs.buyButton = this._normalizeAiSelector(afs.buyButton, 'buyButtonSelector');
+        if (typeof afs.sellButton === 'string') afs.sellButton = this._normalizeAiSelector(afs.sellButton, 'sellButtonSelector');
+        if (typeof afs.orderInstrument === 'string') afs.orderInstrument = this._normalizeAiSelector(afs.orderInstrument, 'orderInstrumentSelector');
+        odi.absoluteFieldSelectors = afs;
+      }
+      out.order_details_identity = odi;
+    }
+    return out;
+  }
+
   _selectorLooksCoarse(rowEl, selector, field) {
     if (!rowEl || !selector || typeof selector !== 'string') return false;
     try {
@@ -397,7 +549,7 @@ class TradeMonitor {
       };
     });
 
-    const balanceItem = aiValidatedResult.balanceSelector;
+    const balanceItem = aiValidatedResult.balanceSelector || aiValidatedResult.balance;
     if (
       balanceItem?.valid &&
       balanceItem.selector &&
@@ -412,7 +564,7 @@ class TradeMonitor {
       };
     }
 
-    const rowItem = aiValidatedResult.rowSelector;
+    const rowItem = aiValidatedResult.rowSelector || aiValidatedResult.row;
     if (rowItem?.valid && rowItem.selector && (overwrite || !capture.rowSelector)) {
       const normalizedRowSelector = this._normalizeAiSelector(rowItem.selector, 'row');
       // Keep row selector scoped to mapped container; ignore document-absolute selectors.
@@ -425,11 +577,304 @@ class TradeMonitor {
         // Ignore invalid/non-scoped AI row selector and preserve existing row selector.
       }
     }
+
+    const globalFieldMap = [
+      { aiKeys: ['equity', 'equitySelector'], assign: 'equitySelector' },
+      { aiKeys: ['buyButton', 'buy'], assign: 'buyButtonSelector' },
+      { aiKeys: ['sellButton', 'sell'], assign: 'sellButtonSelector' },
+      { aiKeys: ['orderInstrument', 'orderInstrumentSelector'], assign: 'orderInstrumentSelector' },
+      { aiKeys: ['openTab', 'open_positions_tab'], assign: 'openTabSelector' },
+      { aiKeys: ['pendingTab', 'pending_positions_tab'], assign: 'pendingTabSelector' },
+      { aiKeys: ['closedTab', 'closed_positions_tab'], assign: 'closedTabSelector' },
+      { aiKeys: ['closedTradesContainer', 'closed_trades_section'], assign: 'closedTradesContainerSelector' }
+    ];
+    globalFieldMap.forEach(({ aiKeys, assign }) => {
+      const item = aiKeys.map((k) => aiValidatedResult[k]).find((v) => v?.valid && v?.selector) || null;
+      if (!item?.valid || !item.selector) return;
+      if (!overwrite && capture[assign]) return;
+      const normalized = this._normalizeAiSelector(item.selector, assign);
+      capture[assign] = normalized;
+    });
   }
 
-  _mappingStatus(text) {
+  _mappingStatus(text, tone = 'info') {
     if (!this._mappingSession?.statusEl) return;
-    this._mappingSession.statusEl.textContent = text || '';
+    const statusEl = this._mappingSession.statusEl;
+    const palette = {
+      info: '#93c5fd',
+      warn: '#fbbf24',
+      error: '#fca5a5',
+      success: '#86efac'
+    };
+    statusEl.style.color = palette[tone] || palette.info;
+    statusEl.textContent = text || '';
+  }
+
+  _mappingFieldLabel(key) {
+    const labels = {
+      balance: 'Balance',
+      equity: 'Equity',
+      buyButton: 'Buy Button',
+      sellButton: 'Sell Button',
+      orderInstrument: 'Order Instrument',
+      openTab: 'Open Tab',
+      pendingTab: 'Pending Tab',
+      closedTab: 'Closed Tab',
+      container: 'Positions Container',
+      closedTradesContainer: 'Closed Trades Container',
+      row: 'Active Position Row',
+      symbol: 'Symbol',
+      side: 'Side',
+      volume: 'Volume',
+      entryPrice: 'Entry Price',
+      currentPrice: 'Current Price',
+      stopLoss: 'Stop Loss',
+      takeProfit: 'Take Profit',
+      pnl: 'P&L',
+      closeButton: 'Close Button'
+    };
+    return labels[key] || key;
+  }
+
+  _mappingStepGuidance(step) {
+    if (!step) return '';
+    const tips = {
+      container: 'Pick the main positions table so scanning stays scoped and fast.',
+      row: 'Pick one live/open position row from that table (not header).',
+      symbol: 'Click the exact symbol text inside the row.',
+      side: 'Click Buy/Sell or Long/Short text/icon cell.',
+      volume: 'Click lot/size/quantity value.',
+      entryPrice: 'Click the open or entry price value.',
+      currentPrice: 'Click the current/mark price value.',
+      openTab: 'Map tab labels to avoid false close/open signals.',
+      pendingTab: 'Map pending tab so pending orders are not treated as active trades.',
+      closedTab: 'Map closed/history tab to ignore historical positions.',
+      closedTradesContainer: 'Optional but recommended if closed and open rows share similar DOM.'
+    };
+    return tips[step.key] || 'Click the exact value element (avoid wrappers if possible).';
+  }
+
+  _setMappingAiHint(text, visible = true) {
+    const aiEl = this._mappingSession?.aiHintEl;
+    if (!(aiEl instanceof HTMLElement)) return;
+    aiEl.textContent = text || '';
+    aiEl.style.display = visible ? 'block' : 'none';
+  }
+
+  _isVisibleMapperRow(el) {
+    if (!(el instanceof HTMLElement)) return false;
+    if (!el.isConnected) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < 8 || r.height < 8) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+    const text = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+    return text.length >= 4;
+  }
+
+  _looksHeaderLikeRow(rowEl) {
+    if (!(rowEl instanceof HTMLElement)) return false;
+    if (rowEl.querySelector('th,[role="columnheader"]')) return true;
+    const text = (rowEl.innerText || rowEl.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!text) return false;
+    const hasHeaderWords = /\b(symbol|type|side|volume|open|entry|current|price|p\/?l|profit|position|time)\b/.test(text);
+    const numericCount = (text.match(/[+-]?\d[\d,]*(?:\.\d+)?/g) || []).length;
+    return hasHeaderWords && numericCount === 0;
+  }
+
+  _isLikelyTradeRowForVerify(rowEl, capture) {
+    if (!(rowEl instanceof HTMLElement)) return false;
+    if (this._looksHeaderLikeRow(rowEl)) return false;
+    const selectors = [
+      capture?.fields?.symbol?.selector,
+      capture?.fields?.side?.selector,
+      capture?.fields?.volume?.selector,
+      capture?.fields?.currentPrice?.selector || capture?.fields?.entryPrice?.selector
+    ].filter((s) => typeof s === 'string' && s.length > 0);
+    if (selectors.length === 0) return true;
+    let matched = 0;
+    selectors.forEach((sel) => {
+      const value = this._readScopedText(rowEl, sel);
+      if (value && value.length > 0) matched += 1;
+    });
+    return matched >= Math.min(2, selectors.length);
+  }
+
+  _readScopedText(scopeEl, selector) {
+    if (!(scopeEl instanceof HTMLElement) || !selector || typeof selector !== 'string') return null;
+    try {
+      const node = scopeEl.querySelector(selector);
+      if (!(node instanceof HTMLElement)) return null;
+      return (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim() || null;
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  _verifyMappingRows(capture, maxRows = 3) {
+    const checks = [];
+    const container = capture?.containerEl instanceof HTMLElement ? capture.containerEl : null;
+    const rowSelector = capture?.rowSelector;
+    if (!container || !rowSelector) {
+      checks.push({
+        id: 'rows.available',
+        label: 'Visible rows sampled',
+        passed: false,
+        details: 'Container/row selector missing',
+        blocking: true
+      });
+      return checks;
+    }
+
+    let rows = [];
+    try {
+      rows = Array.from(container.querySelectorAll(rowSelector)).filter((r) => this._isVisibleMapperRow(r));
+      const likelyRows = rows.filter((r) => this._isLikelyTradeRowForVerify(r, capture));
+      if (likelyRows.length > 0) rows = likelyRows;
+    } catch (_err) {
+      rows = [];
+    }
+    const sampleRows = rows.slice(0, Math.max(1, maxRows));
+    checks.push({
+      id: 'rows.available',
+      label: 'Visible rows sampled',
+      passed: sampleRows.length > 0,
+      details: `${sampleRows.length}/${Math.min(rows.length || sampleRows.length, maxRows)} rows`,
+      blocking: true
+    });
+    if (sampleRows.length === 0) return checks;
+
+    const symbolSelector = capture?.fields?.symbol?.selector || null;
+    const sideSelector = capture?.fields?.side?.selector || null;
+    const priceSelector =
+      capture?.fields?.currentPrice?.selector || capture?.fields?.entryPrice?.selector || null;
+    const requiredPasses = Math.min(2, sampleRows.length);
+
+    const symbolPasses = sampleRows.reduce((acc, row) => {
+      const value = this._readScopedText(row, symbolSelector);
+      if (!value) return acc;
+      return /^[A-Z0-9._:/-]{3,24}$/.test(value.replace(/\s+/g, '')) ? acc + 1 : acc;
+    }, 0);
+    checks.push({
+      id: 'rows.symbol',
+      label: 'Symbol sanity',
+      passed: symbolPasses >= requiredPasses,
+      details: `${symbolPasses}/${sampleRows.length} rows`,
+      blocking: true
+    });
+
+    const sidePasses = sampleRows.reduce((acc, row) => {
+      const value = this._readScopedText(row, sideSelector);
+      if (!value) return acc;
+      return /\b(buy|sell|long|short)\b/i.test(value) ? acc + 1 : acc;
+    }, 0);
+    checks.push({
+      id: 'rows.side',
+      label: 'Side sanity',
+      passed: sidePasses >= requiredPasses,
+      details: `${sidePasses}/${sampleRows.length} rows`,
+      blocking: true
+    });
+
+    const pricePasses = sampleRows.reduce((acc, row) => {
+      const value = this._readScopedText(row, priceSelector);
+      if (!value) return acc;
+      return /[+-]?\d[\d,]*(?:\.\d+)?/.test(value) ? acc + 1 : acc;
+    }, 0);
+    checks.push({
+      id: 'rows.price',
+      label: 'Price sanity',
+      passed: pricePasses >= requiredPasses,
+      details: `${pricePasses}/${sampleRows.length} rows`,
+      blocking: true
+    });
+
+    return checks;
+  }
+
+  _verifyMappingTabs(capture) {
+    const checks = [];
+    const openSel = capture?.openTabSelector || null;
+    const closedSel = capture?.closedTabSelector || null;
+    const pendingSel = capture?.pendingTabSelector || null;
+    const closedContainerSel = capture?.closedTradesContainerSelector || null;
+    const openContainerSel = capture?.containerSelector || null;
+
+    const openResolved = openSel ? document.querySelector(openSel) : null;
+    const closedResolved = closedSel ? document.querySelector(closedSel) : null;
+    const pendingResolved = pendingSel ? document.querySelector(pendingSel) : null;
+    const tabsDisambiguateOpenClosed =
+      !!openSel &&
+      !!closedSel &&
+      openSel !== closedSel &&
+      !!openResolved &&
+      !!closedResolved &&
+      openResolved !== closedResolved;
+
+    checks.push({
+      id: 'tabs.openClosedDistinct',
+      label: 'Open/Closed tabs distinct',
+      passed:
+        !openSel ||
+        !closedSel ||
+        (openSel !== closedSel && openResolved !== closedResolved && !!openResolved && !!closedResolved),
+      details: openSel && closedSel ? 'both mapped and distinct' : 'optional mapping not fully provided',
+      blocking: false
+    });
+
+    checks.push({
+      id: 'tabs.pendingDistinct',
+      label: 'Pending tab distinct',
+      passed:
+        !pendingSel ||
+        (!openSel || pendingSel !== openSel) ||
+        (!closedSel || pendingSel !== closedSel),
+      details: pendingSel ? (pendingResolved ? 'resolved' : 'selector did not resolve') : 'not provided',
+      blocking: false
+    });
+
+    const closedWrapsOpen = this._closedTradesSectionWrapsOpenContainer(closedContainerSel, openContainerSel);
+    const closedContainerConflictAllowed = !!closedWrapsOpen && tabsDisambiguateOpenClosed;
+    checks.push({
+      id: 'tabs.closedContainerSafe',
+      label: 'Closed container does not wrap open',
+      passed: !closedContainerSel || !closedWrapsOpen || closedContainerConflictAllowed,
+      details: !closedContainerSel
+        ? 'not provided'
+        : closedContainerConflictAllowed
+          ? 'shared container allowed because open/closed tabs are mapped'
+          : closedWrapsOpen
+            ? 'conflict detected'
+            : 'safe',
+      blocking: !!closedContainerSel && !!closedWrapsOpen && !closedContainerConflictAllowed
+    });
+
+    return checks;
+  }
+
+  _verifyMappingBeforeSave(capture) {
+    const checks = [...this._verifyMappingRows(capture, 3), ...this._verifyMappingTabs(capture)];
+    const blockingFailures = checks.filter((c) => c.blocking && !c.passed).map((c) => c.id);
+    return {
+      ok: blockingFailures.length === 0,
+      checks,
+      blockingFailures
+    };
+  }
+
+  _formatVerificationMatrix(verification, heading = '') {
+    const checks = Array.isArray(verification?.checks) ? verification.checks : [];
+    const passedCount = checks.filter((c) => c.passed).length;
+    const lines = [];
+    if (heading) lines.push(heading);
+    lines.push(`Verification: ${passedCount}/${checks.length} checks passed`);
+    checks.forEach((c) => {
+      lines.push(`${c.passed ? '[PASS]' : '[FAIL]'} ${c.label} - ${c.details || 'n/a'}`);
+    });
+    if (Array.isArray(verification?.blockingFailures) && verification.blockingFailures.length > 0) {
+      lines.push('Next step: remap failed required fields, then run verify again.');
+    }
+    return lines.join('\n');
   }
 
   _rowFieldKeys() {
@@ -444,6 +889,14 @@ class TradeMonitor {
       'pnl',
       'closeButton'
     ];
+  }
+
+  /** Exness-style row ids in data-test — normalize before persisting order_profile.rowSelector. */
+  _normalizeCapturedRowSelectorForSave(capture) {
+    if (!capture?.rowSelector || typeof window.OrderTableTracker?.normalizeDynamicRowSelector !== 'function') {
+      return;
+    }
+    capture.rowSelector = window.OrderTableTracker.normalizeDynamicRowSelector(capture.rowSelector);
   }
 
   _buildCanonicalSelectorsForStorage(capture) {
@@ -468,15 +921,23 @@ class TradeMonitor {
     if (capture?.equitySelector) fieldSelectors.equity = capture.equitySelector;
     if (capture?.buyButtonSelector) fieldSelectors.buyButton = capture.buyButtonSelector;
     if (capture?.sellButtonSelector) fieldSelectors.sellButton = capture.sellButtonSelector;
+    if (capture?.openTabSelector) fieldSelectors.openTab = capture.openTabSelector;
+    if (capture?.pendingTabSelector) fieldSelectors.pendingTab = capture.pendingTabSelector;
+    if (capture?.closedTabSelector) fieldSelectors.closedTab = capture.closedTabSelector;
     if (capture?.closeButtonSelector) fieldSelectors.closeButton = capture.closeButtonSelector;
     if (capture?.containerSelector) fieldSelectors.container = capture.containerSelector;
+    if (capture?.orderInstrumentSelector) fieldSelectors.orderInstrument = capture.orderInstrumentSelector;
 
     if (capture?.balanceSelector) absoluteFieldSelectors.balance = capture.balanceSelector;
     if (capture?.equitySelector) absoluteFieldSelectors.equity = capture.equitySelector;
     if (capture?.buyButtonSelector) absoluteFieldSelectors.buyButton = capture.buyButtonSelector;
     if (capture?.sellButtonSelector) absoluteFieldSelectors.sellButton = capture.sellButtonSelector;
+    if (capture?.openTabSelector) absoluteFieldSelectors.openTab = capture.openTabSelector;
+    if (capture?.pendingTabSelector) absoluteFieldSelectors.pendingTab = capture.pendingTabSelector;
+    if (capture?.closedTabSelector) absoluteFieldSelectors.closedTab = capture.closedTabSelector;
     if (capture?.closeButtonSelector) absoluteFieldSelectors.closeButton = capture.closeButtonSelector;
     if (capture?.containerSelector) absoluteFieldSelectors.container = capture.containerSelector;
+    if (capture?.orderInstrumentSelector) absoluteFieldSelectors.orderInstrument = capture.orderInstrumentSelector;
 
     return { fieldBindings, fieldSelectors, absoluteFieldSelectors };
   }
@@ -517,7 +978,14 @@ class TradeMonitor {
       ...(capture.equitySelector ? { equity: capture.equitySelector } : {}),
       ...(capture.buyButtonSelector ? { buy_button: capture.buyButtonSelector } : {}),
       ...(capture.sellButtonSelector ? { sell_button: capture.sellButtonSelector } : {}),
+      ...(capture.openTabSelector ? { open_positions_tab: capture.openTabSelector } : {}),
+      ...(capture.pendingTabSelector ? { pending_positions_tab: capture.pendingTabSelector } : {}),
+      ...(capture.closedTabSelector ? { closed_positions_tab: capture.closedTabSelector } : {}),
       ...(capture.closeButtonSelector ? { close_button: capture.closeButtonSelector } : {}),
+      ...(capture.orderInstrumentSelector ? { order_instrument: capture.orderInstrumentSelector } : {}),
+      ...(capture.closedTradesContainerSelector
+        ? { closed_trades_section: capture.closedTradesContainerSelector }
+        : {}),
       order_profile: {
         version: 1,
         host,
@@ -545,9 +1013,10 @@ class TradeMonitor {
         source: 'guided_mapping'
       }
     };
+    const normalizedSelectors = this._normalizeMappedSelectorPayload(selectors);
     return new Promise((resolve) => {
       chrome.runtime.sendMessage(
-        { type: 'TG_SAVE_SELECTORS', payload: { host, selectors } },
+        { type: 'TG_SAVE_SELECTORS', payload: { host, selectors: normalizedSelectors } },
         (res) => resolve(!!res?.success)
       );
     });
@@ -558,10 +1027,13 @@ class TradeMonitor {
       const style = document.createElement('style');
       style.id = 'tg-mapper-styles';
       style.textContent = `
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Outfit:wght@400;500;600;700;800;900&display=swap');
         @keyframes tg-scan {0%{transform:translateY(-100%);opacity:0}10%{opacity:.06}90%{opacity:.06}100%{transform:translateY(400%);opacity:0}}
         @keyframes tg-slide-up {from{transform:translateY(32px);opacity:0}to{transform:translateY(0);opacity:1}}
         @keyframes tg-glow-pulse {0%,100%{box-shadow:0 0 0 0 rgba(0,255,160,0)}50%{box-shadow:0 0 18px 3px rgba(0,255,160,.22)}}
         #tg-mapper-bar * { box-sizing: border-box; }
+        #tg-guided-mapper * { font-family: 'Outfit', system-ui, sans-serif; }
+        #tg-guided-mapper .tgm-mono { font-family: 'IBM Plex Mono', monospace !important; }
       `;
       document.head.appendChild(style);
     }
@@ -623,15 +1095,18 @@ class TradeMonitor {
 
     const rowTop = document.createElement('div');
     rowTop.style.cssText =
-      'display:flex;align-items:center;padding:10px 16px 8px;border-bottom:1px solid rgba(255,255,255,0.05);gap:0;';
+      'display:flex;align-items:center;padding:11px 18px 10px;border-bottom:1px solid rgba(255,255,255,0.05);gap:0;';
     const brand = document.createElement('div');
-    brand.style.cssText = 'display:flex;align-items:center;gap:8px;flex-shrink:0;';
+    brand.style.cssText = 'display:flex;align-items:center;gap:10px;flex-shrink:0;';
     const logoWrap = document.createElement('div');
     logoWrap.style.cssText =
-      'width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#00ffa0,#00c8ff);display:flex;align-items:center;justify-content:center;overflow:hidden;';
+      'width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#00ffa0,#00c8ff);display:flex;align-items:center;justify-content:center;overflow:hidden;box-shadow:0 0 16px rgba(0,255,160,0.3);flex-shrink:0;';
     const logo = document.createElement('img');
     logo.alt = 'TradeGuardX';
-    logo.src = chrome?.runtime?.getURL ? chrome.runtime.getURL('icons/logo.png') : '';
+    logo.src =
+      chrome?.runtime?.id && typeof chrome.runtime.getURL === 'function'
+        ? chrome.runtime.getURL('icons/icon128.png')
+        : '';
     logo.style.cssText = 'width:100%;height:100%;object-fit:cover;';
     logo.addEventListener('error', () => {
       logoWrap.textContent = '⚡';
@@ -642,7 +1117,8 @@ class TradeMonitor {
     logoWrap.appendChild(logo);
     const btxt = document.createElement('div');
     btxt.innerHTML =
-      '<div style="font-size:12px;font-weight:800;color:#e8f8f2;letter-spacing:0.03em;line-height:1;">TradeGuarX</div><div style="font-size:9px;font-family:\'IBM Plex Mono\',monospace;color:#00ffa0;letter-spacing:0.12em;margin-top:1px;">AI MAPPER</div>';
+      '<div style="font-size:15px;font-weight:900;color:#f0fdf8;letter-spacing:-0.01em;line-height:1;font-family:\'Outfit\',system-ui,sans-serif;">Trade<span style="color:#00ffa0;">Guard</span>X</div>'
+      + '<div style="font-size:8.5px;font-family:\'IBM Plex Mono\',monospace;color:#2a8060;letter-spacing:0.16em;margin-top:4px;font-weight:600;">AI FIELD MAPPER</div>';
     brand.appendChild(logoWrap);
     brand.appendChild(btxt);
     const div1 = document.createElement('div');
@@ -653,22 +1129,22 @@ class TradeMonitor {
     badgeRow.style.cssText = 'display:flex;align-items:center;gap:7px;margin-bottom:3px;';
     const stepReq = document.createElement('div');
     stepReq.style.cssText =
-      'font-size:9px;font-weight:700;letter-spacing:0.1em;font-family:"IBM Plex Mono",monospace;padding:2px 7px;border-radius:4px;background:rgba(6,78,59,.5);border:1px solid rgba(0,255,160,.3);color:#6ee7b7;';
+      'font-size:8.5px;font-weight:700;letter-spacing:0.12em;font-family:\'IBM Plex Mono\',monospace;padding:2px 8px;border-radius:5px;background:rgba(6,78,59,.5);border:1px solid rgba(0,255,160,.3);color:#6ee7b7;';
     stepReq.textContent = 'REQUIRED';
     const stepMeta = document.createElement('div');
     stepMeta.style.cssText =
-      'font-size:9px;color:#4a7060;font-family:"IBM Plex Mono",monospace;letter-spacing:0.08em;';
-    stepMeta.textContent = '1 / 15';
+      'font-size:9px;color:#2a6050;font-family:\'IBM Plex Mono\',monospace;letter-spacing:0.1em;font-weight:600;';
+    stepMeta.textContent = 'Step 1 / 20';
     badgeRow.appendChild(stepReq);
     badgeRow.appendChild(stepMeta);
     const step = document.createElement('div');
     step.style.cssText =
-      'font-size:15px;font-weight:700;color:#e2f8f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.2;';
-    step.textContent = 'Press Start to begin';
+      'font-size:15px;font-weight:800;color:#d8f5ec;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.25;font-family:\'Outfit\',system-ui,sans-serif;letter-spacing:-0.01em;';
+    step.textContent = 'Set up your broker mapping';
     const stepHint = document.createElement('div');
     stepHint.style.cssText =
-      'font-size:11px;color:#4a7060;margin-top:2px;font-family:"IBM Plex Mono",monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-    stepHint.textContent = '→ Click Start to begin mapping your broker';
+      'font-size:10.5px;color:#2a6050;margin-top:3px;font-family:\'IBM Plex Mono\',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:0.03em;';
+    stepHint.textContent = '→ Click Start Mapping, then follow each guided step.';
     stepInfo.appendChild(badgeRow);
     stepInfo.appendChild(step);
     stepInfo.appendChild(stepHint);
@@ -677,12 +1153,12 @@ class TradeMonitor {
     const statusWrap = document.createElement('div');
     statusWrap.style.cssText = 'flex-shrink:0;text-align:right;max-width:190px;';
     const status = document.createElement('div');
-    status.style.cssText = 'font-size:11px;color:#4a7060;font-family:"IBM Plex Mono",monospace;line-height:1.4;';
-    status.textContent = 'Ready';
+    status.style.cssText = 'font-size:10.5px;color:#2a6050;font-family:\'IBM Plex Mono\',monospace;line-height:1.4;letter-spacing:0.04em;white-space:pre-line;max-height:140px;overflow:auto;';
+    status.textContent = 'Welcome to guided mapping. We will verify everything before save.';
     const captured = document.createElement('div');
     captured.style.cssText =
-      'font-size:10px;font-weight:600;color:#00ffa0;font-family:"IBM Plex Mono",monospace;margin-top:2px;';
-    captured.textContent = '0 / 15 captured';
+      'font-size:11px;font-weight:700;color:#00ffa0;font-family:\'IBM Plex Mono\',monospace;margin-top:3px;letter-spacing:0.04em;';
+    captured.textContent = '0 of 20 fields captured';
     statusWrap.appendChild(status);
     statusWrap.appendChild(captured);
     const div3 = document.createElement('div');
@@ -719,7 +1195,11 @@ class TradeMonitor {
       ['equity', 'Equity'],
       ['buyButton', 'Buy Btn'],
       ['sellButton', 'Sell Btn'],
-      ['container', 'Container'],
+      ['orderInstrument', 'Order Symbol'],
+      ['openTab', 'Open tab'],
+      ['pendingTab', 'Pending tab'],
+      ['closedTab', 'Closed tab'],
+      ['container', 'Positions Section'],
       ['row', 'Row'],
       ['symbol', 'Symbol'],
       ['side', 'Side'],
@@ -739,10 +1219,12 @@ class TradeMonitor {
       stepsRail.appendChild(seg);
       const chip = document.createElement('div');
       chip.style.cssText =
-        'padding:4px 9px;border-radius:20px;font-size:10px;font-weight:600;font-family:"IBM Plex Mono",monospace;letter-spacing:.05em;border:1px solid rgba(255,255,255,.08);background:rgba(6,12,26,.85);color:rgba(255,255,255,.2);cursor:pointer;';
+        'padding:4px 10px;border-radius:20px;font-size:9.5px;font-weight:600;font-family:\'IBM Plex Mono\',monospace;letter-spacing:.06em;border:1px solid rgba(255,255,255,.07);background:rgba(6,12,26,.85);color:rgba(255,255,255,.18);cursor:pointer;';
       chip.textContent = `• ${label}`;
       capturedChips[key] = chip;
     });
+    stepMeta.textContent = `1 / ${chipMeta.length}`;
+    captured.textContent = `0 / ${chipMeta.length} captured`;
 
     const actions = document.createElement('div');
     actions.style.cssText = 'display:flex;gap:7px;flex-shrink:0;align-items:center;';
@@ -750,24 +1232,24 @@ class TradeMonitor {
     backBtn.textContent = '← Back';
     backBtn.disabled = true;
     backBtn.style.cssText =
-      'height:34px;padding:0 13px;border-radius:8px;border:1px solid rgba(148,163,184,.2);background:rgba(15,23,42,.6);color:#4a6070;cursor:not-allowed;font-size:12px;font-weight:600;opacity:.5;';
+      'height:34px;padding:0 14px;border-radius:9px;border:1px solid rgba(148,163,184,.18);background:rgba(15,23,42,.6);color:#3a5060;cursor:not-allowed;font-size:12px;font-weight:700;font-family:\'Outfit\',system-ui,sans-serif;opacity:.45;letter-spacing:0.01em;';
     const skipBtn = document.createElement('button');
     skipBtn.textContent = 'Skip →';
     skipBtn.style.cssText =
-      'height:34px;padding:0 13px;border-radius:8px;display:none;border:1px solid rgba(59,130,246,.35);background:rgba(30,58,138,.25);color:#93c5fd;cursor:pointer;font-size:12px;font-weight:600;';
+      'height:34px;padding:0 14px;border-radius:9px;display:none;border:1px solid rgba(59,130,246,.32);background:rgba(30,58,138,.22);color:#93c5fd;cursor:pointer;font-size:12px;font-weight:700;font-family:\'Outfit\',system-ui,sans-serif;letter-spacing:0.01em;';
     const pauseBtn = document.createElement('button');
     pauseBtn.textContent = '⏸ Pause';
     pauseBtn.disabled = true;
     pauseBtn.style.cssText =
-      'height:34px;padding:0 13px;border-radius:8px;border:1px solid rgba(251,191,36,.3);background:rgba(120,53,15,.2);color:#fbbf24;cursor:not-allowed;font-size:12px;font-weight:600;opacity:.5;';
+      'height:34px;padding:0 14px;border-radius:9px;border:1px solid rgba(251,191,36,.28);background:rgba(120,53,15,.18);color:#fbbf24;cursor:not-allowed;font-size:12px;font-weight:700;font-family:\'Outfit\',system-ui,sans-serif;opacity:.5;letter-spacing:0.01em;';
     const startBtn = document.createElement('button');
-    startBtn.textContent = '▶ Start';
+    startBtn.textContent = '▶  Start Guided Mapping';
     startBtn.style.cssText =
-      'height:34px;padding:0 18px;border-radius:8px;border:none;background:linear-gradient(135deg,#00ffa0,#00d4aa);color:#001a0e;cursor:pointer;font-size:13px;font-weight:800;box-shadow:0 4px 18px rgba(0,255,160,.28);animation:tg-glow-pulse 2.5s ease-in-out infinite;';
+      'height:36px;padding:0 20px;border-radius:10px;border:none;background:linear-gradient(135deg,#00ffa0,#00d4aa);color:#001a0e;cursor:pointer;font-size:13px;font-weight:900;font-family:\'Outfit\',system-ui,sans-serif;letter-spacing:0.01em;box-shadow:0 4px 18px rgba(0,255,160,.3);animation:tg-glow-pulse 2.5s ease-in-out infinite;';
     const cancelBtn = document.createElement('button');
     cancelBtn.textContent = '✕';
     cancelBtn.style.cssText =
-      'height:34px;padding:0 11px;border-radius:8px;border:1px solid rgba(239,68,68,.25);background:rgba(127,29,29,.18);color:#f87171;cursor:pointer;font-size:13px;font-weight:700;';
+      'height:36px;padding:0 13px;border-radius:10px;border:1px solid rgba(239,68,68,.22);background:rgba(127,29,29,.16);color:#f87171;cursor:pointer;font-size:13px;font-weight:700;font-family:\'Outfit\',system-ui,sans-serif;';
     actions.appendChild(backBtn);
     actions.appendChild(skipBtn);
     actions.appendChild(pauseBtn);
@@ -779,8 +1261,8 @@ class TradeMonitor {
 
     const aiHint = document.createElement('div');
     aiHint.style.cssText =
-      'display:none;padding:10px 16px;border-top:1px solid rgba(167,139,250,.15);background:rgba(76,29,149,.12);font-size:12px;color:#c4b5fd;';
-    aiHint.textContent = 'Claude AI is analyzing your mapping...';
+      'display:none;padding:10px 18px;border-top:1px solid rgba(167,139,250,.14);background:rgba(76,29,149,.1);font-size:11.5px;color:#c4b5fd;font-family:\'IBM Plex Mono\',monospace;letter-spacing:0.04em;';
+    aiHint.textContent = 'TradeGuardX AI assistant: validating selectors and filling safe gaps...';
     inner.appendChild(aiHint);
 
     overlay.appendChild(inner);
@@ -788,9 +1270,9 @@ class TradeMonitor {
 
     const reopenBtn = document.createElement('button');
     reopenBtn.type = 'button';
-    reopenBtn.textContent = '⚡ Resume mapping';
+    reopenBtn.innerHTML = '<span style="font-size:13px;line-height:1;">⚡</span><span style="font-family:\'Outfit\',system-ui,sans-serif;font-size:12px;font-weight:800;letter-spacing:0.02em;">Resume Guided Mapping</span>';
     reopenBtn.style.cssText =
-      'position:fixed;bottom:18px;right:18px;z-index:2147483647;display:none;padding:8px 14px;background:linear-gradient(135deg,rgba(6,12,26,.97),rgba(2,6,18,.99));border:1px solid rgba(0,255,160,.35);border-radius:22px;color:#00ffa0;font-size:12px;font-weight:700;cursor:pointer;box-shadow:0 6px 24px rgba(0,0,0,.5);';
+      'position:fixed;bottom:18px;right:18px;z-index:2147483647;display:none;padding:9px 16px;background:linear-gradient(135deg,rgba(6,12,26,.98),rgba(2,6,18,.99));border:1px solid rgba(0,255,160,.32);border-radius:24px;color:#00ffa0;font-size:12px;font-weight:800;cursor:pointer;box-shadow:0 8px 28px rgba(0,0,0,.55),0 0 0 1px rgba(0,255,160,.08);gap:7px;display:none;align-items:center;';
     document.documentElement.appendChild(reopenBtn);
 
     const subtitle = document.createElement('div');
@@ -850,7 +1332,7 @@ class TradeMonitor {
         if (!beacon) {
           beacon = document.createElement('button');
           beacon.id = 'tg-mapper-visibility-beacon';
-          beacon.textContent = 'Open Mapper';
+          beacon.innerHTML = '<span style="all:initial!important;font-size:13px!important;line-height:1!important">⚡</span><span style="all:initial!important;font-family:Outfit,system-ui,sans-serif!important;font-size:12px!important;font-weight:800!important;letter-spacing:0.01em!important">Open Mapper</span>';
           beacon.style.cssText = [
             'all: initial !important',
             'position: fixed !important',
@@ -860,16 +1342,20 @@ class TradeMonitor {
             'top: auto !important',
             'transform: none !important',
             'z-index: 2147483647 !important',
-            'font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif !important',
+            'display: flex !important',
+            'align-items: center !important',
+            'gap: 7px !important',
+            'font-family: Outfit,system-ui,sans-serif !important',
             'font-size: 12px !important',
-            'font-weight: 700 !important',
+            'font-weight: 800 !important',
             'color: #001a0e !important',
-            'background: linear-gradient(135deg,#00ffa0,#00d4ff) !important',
+            'background: linear-gradient(135deg,#00ffa0 0%,#00d4ff 100%) !important',
             'border: none !important',
-            'border-radius: 10px !important',
-            'padding: 8px 12px !important',
+            'border-radius: 12px !important',
+            'padding: 9px 15px !important',
             'cursor: pointer !important',
-            'box-shadow: 0 10px 28px rgba(0,0,0,0.45) !important'
+            'box-shadow: 0 8px 28px rgba(0,255,160,0.28), 0 2px 8px rgba(0,0,0,0.5) !important',
+            'letter-spacing: 0.01em !important'
           ].join(';');
           beacon.addEventListener('click', () => {
             if (overlayEl instanceof HTMLElement) {
@@ -989,7 +1475,7 @@ class TradeMonitor {
     ].join(';');
     const guideTitle = document.createElement('div');
     guideTitle.style.cssText = 'font-size:11px;color:#67e8f9;letter-spacing:0.08em;font-weight:700;';
-    guideTitle.textContent = 'MAPPING GUIDE';
+    guideTitle.textContent = 'GUIDED MAPPING';
     const guideStep = document.createElement('div');
     guideStep.style.cssText = 'font-size:13px;font-weight:700;color:#e2e8f0;margin-top:2px;';
     const guideHint = document.createElement('div');
@@ -1004,7 +1490,40 @@ class TradeMonitor {
       { key: 'equity', label: 'Point to equity value (optional)', required: false, scope: 'global' },
       { key: 'buyButton', label: 'Point to BUY button (optional)', required: false, scope: 'global' },
       { key: 'sellButton', label: 'Point to SELL button (optional)', required: false, scope: 'global' },
-      { key: 'container', label: 'Point to positions table/container', required: true, scope: 'global' },
+      {
+        key: 'orderInstrument',
+        label:
+          'Point to order-ticket instrument (e.g. ETH near Buy/Sell) — optional; avoids wrong symbol from nearby labels',
+        required: false,
+        scope: 'global'
+      },
+      {
+        key: 'openTab',
+        label:
+          'Point to the OPEN POSITIONS tab button — required so we know when you are viewing active positions vs. history.',
+        required: true,
+        scope: 'global'
+      },
+      {
+        key: 'pendingTab',
+        label: 'Point to PENDING tab button (optional; avoids counting pending rows as open trades)',
+        required: false,
+        scope: 'global'
+      },
+      {
+        key: 'closedTab',
+        label:
+          'Point to the CLOSED TRADES / HISTORY tab button — required so switching to history does not fire a false close event.',
+        required: true,
+        scope: 'global'
+      },
+      {
+        key: 'container',
+        label:
+          'Point to the section that lists your ACTIVE positions — every other table on this page (open orders, closed trades, order history) will be ignored.',
+        required: true,
+        scope: 'global'
+      },
       { key: 'row', label: 'Point to one active position row in that container', required: true, scope: 'container' },
       { key: 'symbol', label: 'Point to Symbol value in that row', required: false, scope: 'row' },
       { key: 'side', label: 'Point to Side value in that row', required: false, scope: 'row' },
@@ -1032,6 +1551,7 @@ class TradeMonitor {
 
     const isStepCaptured = (key) => {
       if (key === 'container') return !!capture.containerSelector;
+      if (key === 'closedTradesContainer') return !!capture.closedTradesContainerSelector;
       if (key === 'row') return !!capture.rowSelector;
       return !!capture.fields?.[key]?.selector;
     };
@@ -1042,9 +1562,16 @@ class TradeMonitor {
         capture.containerEl = null;
         capture.containerSelector = null;
         capture.containerTag = null;
+        capture.closedTradesContainerEl = null;
+        capture.closedTradesContainerSelector = null;
         capture.rowEl = null;
         capture.rowSelector = null;
         capture.rowSelectorHint = null;
+        return;
+      }
+      if (key === 'closedTradesContainer') {
+        capture.closedTradesContainerEl = null;
+        capture.closedTradesContainerSelector = null;
         return;
       }
       if (key === 'row') {
@@ -1060,14 +1587,14 @@ class TradeMonitor {
       const s = steps[stepIdx];
       if (!s) return;
       ui.skipBtn.style.display = !captureActive || s.required ? 'none' : 'inline-block';
-      ui.skipBtn.textContent = s.required ? 'Skip' : 'Skip optional';
+      ui.skipBtn.textContent = s.required ? 'Skip' : 'Skip Optional';
       ui.backBtn.disabled = !captureActive || stepIdx === 0;
       ui.backBtn.style.opacity = ui.backBtn.disabled ? '0.5' : '1';
       ui.pauseBtn.disabled = !captureActive;
       ui.pauseBtn.style.opacity = ui.pauseBtn.disabled ? '0.5' : '1';
       ui.pauseBtn.style.cursor = ui.pauseBtn.disabled ? 'not-allowed' : 'pointer';
-      ui.pauseBtn.textContent = capturePaused ? 'Resume' : 'Pause';
-      ui.capturedEl.textContent = `Captured: ${countCapturedFields()} fields`;
+      ui.pauseBtn.textContent = capturePaused ? 'Resume Mapping' : 'Pause Mapping';
+      ui.capturedEl.textContent = `${countCapturedFields()} of ${steps.length} fields captured`;
       if (capturePaused) {
         ui.pauseBtn.style.borderColor = 'rgba(34,197,94,0.55)';
         ui.pauseBtn.style.background = 'rgba(22,163,74,0.2)';
@@ -1078,7 +1605,7 @@ class TradeMonitor {
         ui.pauseBtn.style.color = '#fde68a';
       }
       if (ui.dockBtn) {
-        ui.dockBtn.textContent = isDocked ? 'Expand' : 'Dock';
+        ui.dockBtn.textContent = isDocked ? 'Expand View' : 'Dock View';
       }
       // During active capture, keep page visible and interactive.
       ui.backdrop.style.display = captureActive && !capturePaused && !isMinimized ? 'none' : 'block';
@@ -1167,19 +1694,20 @@ class TradeMonitor {
     const setStepText = () => {
       const s = steps[stepIdx];
       if (!s) return;
-      const modeLabel = !captureActive ? 'Not started' : capturePaused ? 'Paused' : 'Capturing';
+      const modeLabel = !captureActive ? 'Ready' : capturePaused ? 'Paused' : 'Capturing';
       ui.stepMetaEl.textContent = `Step ${stepIdx + 1} / ${steps.length} · ${modeLabel}`;
       ui.stepReqEl.textContent = s.required ? 'REQUIRED' : 'OPTIONAL';
       ui.stepReqEl.style.color = s.required ? '#6ee7b7' : '#93c5fd';
       ui.stepReqEl.style.background = s.required ? 'rgba(6,78,59,0.35)' : 'rgba(30,64,175,0.22)';
       ui.stepReqEl.style.borderColor = s.required ? 'rgba(52,211,153,0.35)' : 'rgba(59,130,246,0.35)';
+      const shortLabel = this._mappingFieldLabel(s.key);
       const label = String(s.label || '').replace(/^Point to\s*/i, '');
-      ui.stepEl.textContent = label;
-      ui.stepHintEl.textContent = `→ ${s.label}`;
+      ui.stepEl.textContent = shortLabel;
+      ui.stepHintEl.textContent = `→ ${this._mappingStepGuidance(s)}`;
       guideStep.textContent = `${s.required ? 'Required' : 'Optional'} · ${label}`;
       guideHint.textContent = capturePaused
-        ? 'Paused: use Resume to continue mapping.'
-        : `Step ${stepIdx + 1}/${steps.length} · Click exact element on page.`;
+        ? 'Paused. Click Resume Mapping when you are ready.'
+        : `Step ${stepIdx + 1}/${steps.length} · Click the exact element on the broker page.`;
       const pct = Math.max(0, Math.min(100, ((stepIdx + 1) / steps.length) * 100));
       ui.progressEl.style.width = `${pct}%`;
       if (Array.isArray(ui.progressSegEls)) {
@@ -1194,7 +1722,7 @@ class TradeMonitor {
       syncControls();
     };
     setStepText();
-    this._mappingStatus('Press "Start mapping" to begin.');
+    this._mappingStatus('Click "Start Guided Mapping" to begin.', 'info');
 
     const updateHighlight = (el) => {
       if (!(el instanceof HTMLElement) || !el.isConnected) {
@@ -1248,18 +1776,27 @@ class TradeMonitor {
 
     // Draggable mapper bar (drag from top row)
     let dragActive = false;
+    let dragMoved = false;
+    let userMovedOverlay = false;
     let dragStartX = 0;
     let dragStartY = 0;
     let dragOverlayLeft = 0;
     let dragOverlayTop = 0;
+    let suppressMappingClickUntil = 0;
+    const DRAG_THRESHOLD_PX = 3;
 
     const onDragMove = (e) => {
       if (!dragActive) return;
       // Prevent page text selection / native drag for smoother movement (notably on Windows)
       e.preventDefault();
       e.stopPropagation();
+      e.stopImmediatePropagation();
       const dx = e.clientX - dragStartX;
       const dy = e.clientY - dragStartY;
+      if (!dragMoved) {
+        if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+        dragMoved = true;
+      }
       ui.overlay.style.left = `${dragOverlayLeft + dx}px`;
       ui.overlay.style.top = `${dragOverlayTop + dy}px`;
       ui.overlay.style.right = 'auto';
@@ -1268,17 +1805,32 @@ class TradeMonitor {
 
     const onDragUp = () => {
       if (!dragActive) return;
+      if (dragMoved) {
+        userMovedOverlay = true;
+        // After a real drag, ignore the next capture click caused by mouseup.
+        suppressMappingClickUntil = Date.now() + 320;
+      }
       dragActive = false;
+      dragMoved = false;
       document.removeEventListener('mousemove', onDragMove, true);
       document.removeEventListener('mouseup', onDragUp, true);
     };
 
     const onDragDown = (e) => {
       if (e.button !== 0) return;
+      const target = e.target;
+      if (
+        target instanceof HTMLElement &&
+        target.closest('button, a, input, select, textarea, [role="button"], [data-no-drag="true"]')
+      ) {
+        return;
+      }
       // Avoid text selection and other default behaviors while starting drag
       e.preventDefault();
       e.stopPropagation();
+      e.stopImmediatePropagation();
       dragActive = true;
+      dragMoved = false;
       const rect = ui.overlay.getBoundingClientRect();
       dragStartX = e.clientX;
       dragStartY = e.clientY;
@@ -1300,19 +1852,26 @@ class TradeMonitor {
         return;
       }
       setStepText();
-      this._mappingStatus('');
+      this._mappingStatus('', 'info');
     };
 
     const onStart = () => {
       if (captureActive) return;
       captureActive = true;
-      resetMapperLayout(ui.overlay);
+      // Preserve current user-adjusted panel size/position instead of forcing full-width reset.
+      if (!userMovedOverlay && !isDocked) {
+        resetMapperLayout(ui.overlay);
+      }
       // After starting, visually de‑emphasize Start and enable Pause
       ui.startBtn.disabled = true;
       ui.startBtn.style.opacity = '0.6';
       ui.startBtn.style.cursor = 'default';
+      ui.startBtn.textContent = 'Mapping In Progress';
       guide.style.display = 'block';
-      this._mappingStatus('Mapping started. Panel docked so you can see page. Click exact element for this step.');
+      this._mappingStatus(
+        'Guided mapping started. Click the highlighted field on your broker page.',
+        'info'
+      );
       setStepText();
     };
 
@@ -1321,7 +1880,10 @@ class TradeMonitor {
       const prev = steps[stepIdx - 1];
       if (prev) clearStepCapture(prev.key);
       stepIdx -= 1;
-      this._mappingStatus(`Went back to ${steps[stepIdx].key}. Click again to update it.`);
+      this._mappingStatus(
+        `Moved back to ${this._mappingFieldLabel(steps[stepIdx].key)}. Click again to update it.`,
+        'info'
+      );
       setStepText();
     };
 
@@ -1331,8 +1893,10 @@ class TradeMonitor {
       highlight.style.display = 'none';
       this._mappingStatus(
         capturePaused
-          ? 'Mapping paused. You can interact with broker UI. Click Resume when ready.'
+          ? 'Mapping paused. You can interact with the page now.'
           : 'Mapping resumed. Click the exact value for this step.'
+        ,
+        capturePaused ? 'warn' : 'info'
       );
       setStepText();
     };
@@ -1340,12 +1904,12 @@ class TradeMonitor {
     const onMinimize = () => {
       if (!captureActive) return;
       setMinimized(true);
-      this._mappingStatus('Mapper minimized. Use "Resume mapping" button to continue.');
+      this._mappingStatus('Mapper minimized. Use "Resume Mapping" to continue.', 'warn');
     };
 
     const onReopen = () => {
       setMinimized(false);
-      this._mappingStatus('Mapper restored. Continue from current step.');
+      this._mappingStatus('Mapper restored. Continue from your current step.', 'info');
       if (captureActive) {
         capturePaused = false;
       }
@@ -1362,7 +1926,7 @@ class TradeMonitor {
       setMinimized(false);
       applyDockMode(true);
       const human = String(steps[idx].label || key).replace(/^Point to\s*/i, '');
-      this._mappingStatus(`Editing ${human}. Click the new element to replace previous mapping.`);
+      this._mappingStatus(`Editing ${human}. Click a new element to replace this mapping.`, 'info');
       setStepText();
     };
 
@@ -1371,8 +1935,10 @@ class TradeMonitor {
       applyDockMode(!isDocked);
       this._mappingStatus(
         isDocked
-          ? 'Docked mode enabled. Page is visible for element selection.'
+          ? 'Docked view enabled. Page is visible for easier selection.'
           : 'Expanded mode enabled.'
+        ,
+        'info'
       );
     };
 
@@ -1446,6 +2012,7 @@ class TradeMonitor {
       if (!this._mappingSession) return;
       if (!captureActive) return;
       if (capturePaused || isMinimized) return;
+      if (Date.now() < suppressMappingClickUntil) return;
       const el = e.target;
       if (!(el instanceof HTMLElement)) return;
       if (ui.overlay.contains(el)) return;
@@ -1455,10 +2022,33 @@ class TradeMonitor {
       const step = steps[stepIdx];
       if (!step) return;
 
+      if (step.key === 'container') {
+        const resolvedContainer = resolveContainerCandidate(el) || el;
+        capture.containerEl = resolvedContainer;
+        capture.containerSelector = this._getExactSelector(resolvedContainer);
+        capture.containerTag = resolvedContainer.tagName.toLowerCase();
+        if (!capture.containerSelector) {
+          this._mappingStatus('Could not map container selector. Try clicking a more specific container element.', 'error');
+          return;
+        }
+        advance();
+        return;
+      }
+      if (step.key === 'closedTradesContainer') {
+        const resolvedClosed = resolveContainerCandidate(el) || el;
+        capture.closedTradesContainerEl = resolvedClosed;
+        capture.closedTradesContainerSelector = this._getExactSelector(resolvedClosed);
+        if (!capture.closedTradesContainerSelector) {
+          this._mappingStatus('Could not map closed-trades container. Try clicking inside its table area.', 'error');
+          return;
+        }
+        advance();
+        return;
+      }
       if (step.scope === 'global') {
         const selector = this._getExactSelector(el);
         if (!selector) {
-          this._mappingStatus('Could not build selector. Click the exact value element.');
+          this._mappingStatus('Could not map this selector. Click the exact value element (not wrapper).', 'error');
           return;
         }
         const liveValue = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 200);
@@ -1472,19 +2062,6 @@ class TradeMonitor {
         advance();
         return;
       }
-
-      if (step.key === 'container') {
-        const resolvedContainer = resolveContainerCandidate(el) || el;
-        capture.containerEl = resolvedContainer;
-        capture.containerSelector = this._getExactSelector(resolvedContainer);
-        capture.containerTag = resolvedContainer.tagName.toLowerCase();
-        if (!capture.containerSelector) {
-          this._mappingStatus('Could not build selector for container. Try another element.');
-          return;
-        }
-        advance();
-        return;
-      }
       if (step.key === 'row') {
         if (!capture.containerEl?.contains(el)) {
           const correctedContainer = resolveContainerCandidate(el);
@@ -1492,25 +2069,25 @@ class TradeMonitor {
             capture.containerEl = correctedContainer;
             capture.containerSelector = this._getExactSelector(correctedContainer);
             capture.containerTag = correctedContainer.tagName.toLowerCase();
-            this._mappingStatus('Container updated from your click. Continue selecting row.');
+            this._mappingStatus('Container auto-updated from your click. Continue with row mapping.', 'info');
           } else {
-            this._mappingStatus('Row must be inside selected container.');
+            this._mappingStatus('Selected row must be inside the mapped positions container.', 'error');
             return;
           }
         }
         capture.rowEl = resolveRowCandidate(el, capture.containerEl);
         if (!capture.rowEl || !capture.containerEl.contains(capture.rowEl)) {
-          this._mappingStatus('Could not resolve row in selected container.');
+          this._mappingStatus('Could not resolve a valid row in the selected container.', 'error');
           return;
         }
         capture.rowSelector = this._getExactSelector(capture.rowEl, capture.containerEl);
         capture.rowSelectorHint = capture.rowEl.tagName === 'TR' ? 'tr' : null;
         if (!capture.rowSelector) {
-          this._mappingStatus('Could not build row selector. Click row again.');
+          this._mappingStatus('Could not map row selector. Click the row again, closer to a value cell.', 'error');
           return;
         }
         // Continue manual mapping steps; Claude verification runs at finalize.
-        this._mappingStatus('Row captured. Continue mapping fields.');
+        this._mappingStatus('Row mapped successfully. Continue mapping field values.', 'success');
         advance();
         return;
       }
@@ -1522,15 +2099,15 @@ class TradeMonitor {
           capture.rowSelector =
             this._getExactSelector(correctedRow, capture.containerEl) || capture.rowSelector;
           capture.rowSelectorHint = correctedRow.tagName === 'TR' ? 'tr' : capture.rowSelectorHint;
-          this._mappingStatus('Row auto-corrected from your click.');
+          this._mappingStatus('Auto-corrected to nearest valid row from your click.', 'warn');
         } else {
-          this._mappingStatus('Please click an element inside the selected row.');
+          this._mappingStatus('Click an element inside the selected active row.', 'error');
           return;
         }
       }
       const selector = this._getExactSelector(el, capture.rowEl);
       if (!selector) {
-        this._mappingStatus('Could not build field selector. Try another element.');
+        this._mappingStatus('Could not map this field selector. Try a more specific value element.', 'error');
         return;
       }
       const liveValue = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 200);
@@ -1541,41 +2118,51 @@ class TradeMonitor {
         source: 'guided_mapping',
         confidence: 0.99
       };
-      this._mappingStatus(`Captured ${step.key}.`);
+      this._mappingStatus(`Captured ${this._mappingFieldLabel(step.key)}.`, 'success');
       advance();
     };
 
     const onCancel = () => {
       guide.style.display = 'none';
       this._teardownMapping();
-      showToast?.('Platform mapping cancelled.', 'warn');
+      showToast?.('Guided mapping cancelled. No changes were saved.', 'warn');
     };
 
     const onSkip = () => {
       const step = steps[stepIdx];
       if (!step) return;
       if (step.required) {
-        this._mappingStatus('This step is required.');
+        this._mappingStatus('This is a required step and cannot be skipped.', 'warn');
         return;
       }
-      capture.fields[step.key] = null;
+      if (step.key === 'closedTradesContainer') {
+        capture.closedTradesContainerEl = null;
+        capture.closedTradesContainerSelector = null;
+      } else {
+        capture.fields[step.key] = null;
+      }
       advance();
     };
 
     const finalize = async () => {
       if (!capture.containerSelector || !capture.rowSelector) {
-        this._mappingStatus('Container and row are required.');
+        this._mappingStatus('Positions container and active row are required before save.', 'error');
         return;
       }
       capture.balanceSelector = capture.fields.balance?.selector || null;
       capture.equitySelector = capture.fields.equity?.selector || null;
       capture.buyButtonSelector = capture.fields.buyButton?.selector || null;
       capture.sellButtonSelector = capture.fields.sellButton?.selector || null;
+      capture.orderInstrumentSelector = capture.fields.orderInstrument?.selector || null;
+      capture.openTabSelector = capture.fields.openTab?.selector || null;
+      capture.pendingTabSelector = capture.fields.pendingTab?.selector || null;
+      capture.closedTabSelector = capture.fields.closedTab?.selector || null;
       capture.closeButtonSelector = capture.fields.closeButton?.absolute || null;
 
       // User-first flow: after user completes mapping, run Claude once to enrich missing fields.
       if (window.DeepMapper && capture.rowEl) {
-        this._mappingStatus('Running Claude verification on your completed mapping...');
+        this._setMappingAiHint('TradeGuardX AI assistant: validating your mapped fields...');
+        this._mappingStatus('Running AI validation on your mapping...', 'info');
         try {
           const manualSelections = this._manualSelectionsFromCaptureFields(capture.fields);
           const aiValidated = await this._runAiFieldMapping(capture.rowEl, manualSelections);
@@ -1589,16 +2176,28 @@ class TradeMonitor {
           capture.equitySelector = capture.fields.equity?.selector || capture.equitySelector;
           capture.buyButtonSelector = capture.fields.buyButton?.selector || capture.buyButtonSelector;
           capture.sellButtonSelector = capture.fields.sellButton?.selector || capture.sellButtonSelector;
+          capture.orderInstrumentSelector =
+            capture.fields.orderInstrument?.selector || capture.orderInstrumentSelector;
+          capture.openTabSelector = capture.fields.openTab?.selector || capture.openTabSelector;
+          capture.pendingTabSelector = capture.fields.pendingTab?.selector || capture.pendingTabSelector;
+          capture.closedTabSelector = capture.fields.closedTab?.selector || capture.closedTabSelector;
           capture.closeButtonSelector = capture.fields.closeButton?.absolute || capture.closeButtonSelector;
+          this._mappingStatus('AI validation completed. Running required checks...', 'success');
         } catch (_err) {
           // Continue saving user mapping even if Claude verification fails.
+          this._mappingStatus('AI validation unavailable. Continuing with your mapped selectors.', 'warn');
+        } finally {
+          this._setMappingAiHint('', false);
         }
       }
+      this._normalizeCapturedRowSelectorForSave(capture);
       let canonical = this._buildCanonicalSelectorsForStorage(capture);
       let canonicalCheck = this._validateCanonicalForSave(canonical);
       if (!canonicalCheck.ok && window.DeepMapper && capture.rowEl) {
+        this._setMappingAiHint('TradeGuardX AI assistant: running deeper pass for missing required fields...');
         this._mappingStatus(
-          `Required fields missing (${canonicalCheck.missing.join(', ')}). Asking Claude with broader context...`
+          `Required fields missing (${canonicalCheck.missing.join(', ')}). Running deeper AI pass...`,
+          'warn'
         );
         try {
           const manualSelections = this._manualSelectionsFromCaptureFields(capture.fields);
@@ -1616,32 +2215,54 @@ class TradeMonitor {
           capture.equitySelector = capture.fields.equity?.selector || capture.equitySelector;
           capture.buyButtonSelector = capture.fields.buyButton?.selector || capture.buyButtonSelector;
           capture.sellButtonSelector = capture.fields.sellButton?.selector || capture.sellButtonSelector;
+          capture.orderInstrumentSelector =
+            capture.fields.orderInstrument?.selector || capture.orderInstrumentSelector;
+          capture.openTabSelector = capture.fields.openTab?.selector || capture.openTabSelector;
+          capture.pendingTabSelector = capture.fields.pendingTab?.selector || capture.pendingTabSelector;
+          capture.closedTabSelector = capture.fields.closedTab?.selector || capture.closedTabSelector;
           capture.closeButtonSelector = capture.fields.closeButton?.absolute || capture.closeButtonSelector;
+          this._normalizeCapturedRowSelectorForSave(capture);
           canonical = this._buildCanonicalSelectorsForStorage(capture);
           canonicalCheck = this._validateCanonicalForSave(canonical);
         } catch (_err) {
           // keep existing message path below
+        } finally {
+          this._setMappingAiHint('', false);
         }
       }
       if (!canonicalCheck.ok) {
-        this._mappingStatus(
-          `Mapped selectors missing required fields: ${canonicalCheck.missing.join(', ')}. Please remap row.`
-        );
+        const verifyFail = this._verifyMappingBeforeSave(capture);
+        this._mappingStatus(this._formatVerificationMatrix(
+          verifyFail,
+          `Required fields still missing: ${canonicalCheck.missing.join(', ')}. Please remap and verify again.`
+        ), 'error');
         return;
       }
+      const verification = this._verifyMappingBeforeSave(capture);
+      if (!verification.ok) {
+        this._mappingStatus(this._formatVerificationMatrix(
+          verification,
+          'Verification did not pass. Fix failed required checks before saving.'
+        ), 'error');
+        return;
+      }
+      this._mappingStatus(
+        this._formatVerificationMatrix(verification, 'Verification passed. Saving mapping profile...'),
+        'success'
+      );
       capture.fieldBindings = canonical.fieldBindings;
       capture.fieldSelectors = canonical.fieldSelectors;
       capture.absoluteFieldSelectors = canonical.absoluteFieldSelectors;
 
       const saved = await this._saveGuidedProfile(capture);
       if (!saved) {
-        this._mappingStatus('Failed to save profile.');
+        this._mappingStatus('Could not save mapping profile. Please retry.', 'error');
         return;
       }
       this._lastSavedOrderSelector = capture.containerSelector;
       this._identityLocked = true;
       this._requiresMapping = false;
-      this._loadedSelectors = {
+      this._loadedSelectors = this._normalizeMappedSelectorPayload({
         ...(this._loadedSelectors || {}),
         mapping_complete: true,
         mapping_version: 1,
@@ -1650,7 +2271,14 @@ class TradeMonitor {
         ...(capture.equitySelector ? { equity: capture.equitySelector } : {}),
         ...(capture.buyButtonSelector ? { buy_button: capture.buyButtonSelector } : {}),
         ...(capture.sellButtonSelector ? { sell_button: capture.sellButtonSelector } : {}),
+        ...(capture.openTabSelector ? { open_positions_tab: capture.openTabSelector } : {}),
+        ...(capture.pendingTabSelector ? { pending_positions_tab: capture.pendingTabSelector } : {}),
+        ...(capture.closedTabSelector ? { closed_positions_tab: capture.closedTabSelector } : {}),
         ...(capture.closeButtonSelector ? { close_button: capture.closeButtonSelector } : {}),
+        ...(capture.orderInstrumentSelector ? { order_instrument: capture.orderInstrumentSelector } : {}),
+        ...(capture.closedTradesContainerSelector
+          ? { closed_trades_section: capture.closedTradesContainerSelector }
+          : {}),
         order_profile: {
           version: 1,
           host: window.location.hostname,
@@ -1677,11 +2305,26 @@ class TradeMonitor {
           capturedAt: Date.now(),
           source: 'guided_mapping'
         }
-      };
+      });
       this._mappedSelectors = this._loadedSelectors;
       if (typeof this.detector.setPreferredPositionsSelector === 'function') {
         this.detector.setPreferredPositionsSelector(capture.containerSelector);
       }
+      if (typeof this.detector.setClosedTradesSectionSelector === 'function') {
+        this.detector.setClosedTradesSectionSelector(capture.closedTradesContainerSelector || null);
+      }
+      if (typeof this.detector.setTradeTabSelectors === 'function') {
+        this.detector.setTradeTabSelectors({
+          open: capture.openTabSelector || null,
+          pending: capture.pendingTabSelector || null,
+          closed: capture.closedTabSelector || null
+        });
+      }
+      this._installTabClickTracking({
+        open: capture.openTabSelector || null,
+        pending: capture.pendingTabSelector || null,
+        closed: capture.closedTabSelector || null
+      });
       if (this._orderTracker) {
         this._orderTracker.importProfile({
           version: 1,
@@ -1699,7 +2342,7 @@ class TradeMonitor {
       guide.style.display = 'none';
       this._startMonitoringLoops();
       this.runFullScan();
-      showToast?.('Platform mapping saved. Using mapped selectors now.', 'info');
+      showToast?.('Mapping saved successfully. TradeGuardX is now running in mapped mode.', 'info');
     };
 
     const onGuideClick = () => {
@@ -1709,7 +2352,7 @@ class TradeMonitor {
         return;
       }
       applyDockMode(!isDocked);
-      this._mappingStatus(isDocked ? 'Docked panel opened.' : 'Expanded panel opened.');
+      this._mappingStatus(isDocked ? 'Docked view enabled.' : 'Expanded view enabled.', 'info');
     };
 
     ui.startBtn.addEventListener('click', onStart);
@@ -1782,6 +2425,7 @@ class TradeMonitor {
           return;
         }
         this._lastTradesDigest = digest;
+        this._syncPositionOpenTimes(trades);
         this.accountState.positions = trades.map((t) => ({
           symbol: t.symbol,
           side: t.side,
@@ -1806,24 +2450,36 @@ class TradeMonitor {
     if (this._requiresMapping) return;
     if (this._tradesObserver) return;
     if (this._ensureOrderTrackerBound()) return;
-    let container = this._resolveIdentityContainer();
-    if (!container && this._isMappedCrawlMode()) return;
-    if (!container) {
-      const trades = this.detector.detectTrades(document.body);
-      if (!trades.length) return;
-      container = trades[0].element?.closest(
-        '[class*="positions"],[class*="position"],[class*="trades"],table'
-      );
+    const sourceHelper = window.TradeGuardXPositionSource;
+    let container = null;
+    if (sourceHelper && typeof sourceHelper.resolveObservationContainer === 'function') {
+      container = sourceHelper.resolveObservationContainer({
+        detector: this.detector,
+        resolveIdentityContainer: () => this._resolveIdentityContainer(),
+        isMappedCrawlMode: this._isMappedCrawlMode()
+      });
+    } else {
+      container = this._resolveIdentityContainer();
+      if (!container && this._isMappedCrawlMode()) return;
       if (!container) {
-        container = trades[0].element?.parentElement?.parentElement;
+        const trades = this.detector.detectTrades(document.body);
+        if (!trades.length) return;
+        container = trades[0].element?.closest(
+          '[class*="positions"],[class*="position"],[class*="trades"],table'
+        );
+        if (!container) {
+          container = trades[0].element?.parentElement?.parentElement;
+        }
       }
-      if (!container) return;
     }
+    if (!container) return;
 
     this._positionsContainer = container;
 
     const observer = this.detector.observeTrades(container, (newTrades) => {
-      this.accountState.positions = newTrades.map((t) => ({
+      const stableTrades = this._stabilizeTrades(newTrades);
+      this._syncPositionOpenTimes(stableTrades);
+      this.accountState.positions = stableTrades.map((t) => ({
         rowId: t.rowId ?? null,
         symbol: t.symbol,
         side: t.side,
@@ -1834,7 +2490,7 @@ class TradeMonitor {
         entryPrice: t.entryPrice ?? null,
         currentPrice: t.currentPrice ?? null
       }));
-      this.updateSlTpReminder(newTrades);
+      this.updateSlTpReminder(stableTrades);
       this.evaluateAndReact('PASSIVE');
     });
     if (observer) this._tradesObserver = observer;
@@ -1848,6 +2504,21 @@ class TradeMonitor {
   }
 
   getLiveTrades() {
+    const sourceHelper = window.TradeGuardXPositionSource;
+    if (sourceHelper && typeof sourceHelper.getLiveTrades === 'function') {
+      const result = sourceHelper.getLiveTrades({
+        detector: this.detector,
+        orderTracker: this._orderTracker,
+        getTradesScanRoot: () => this._getTradesScanRoot(),
+        trackerEmptyStreak: this._trackerEmptyStreak,
+        identityLocked: this._identityLocked
+      });
+      this._trackerEmptyStreak = Number(result?.trackerEmptyStreak) || 0;
+      if (typeof result?.identityLocked === 'boolean') {
+        this._identityLocked = result.identityLocked;
+      }
+      return Array.isArray(result?.trades) ? result.trades : [];
+    }
     if (this._orderTracker?.isBound()) {
       const tracked = this._orderTracker.getTrades();
       if (tracked.length > 0) {
@@ -1855,26 +2526,32 @@ class TradeMonitor {
         return tracked;
       }
       this._trackerEmptyStreak += 1;
-      if (this._isMappedCrawlMode()) {
-        // Mapping-complete mode: avoid heuristic fallback to prevent drift.
-        return [];
-      }
+      // Order: mapped OrderTableTracker first, then heuristic detectTrades if empty.
       const fallback = this.detector.detectTrades(this._getTradesScanRoot());
       if (fallback.length > 0) {
         this._trackerEmptyStreak = 0;
         return fallback;
       }
-      // If tracker stays empty for multiple cycles, unlock identity to allow rebinding/relearn.
       if (this._trackerEmptyStreak >= 4) {
         this._identityLocked = false;
       }
       return [];
     }
-    if (this._isMappedCrawlMode()) return [];
+    // No bound tracker: still prefer running heuristics after mapped path failed to bind.
     return this.detector.detectTrades(this._getTradesScanRoot());
   }
 
   _stabilizeTrades(trades) {
+    const helper = window.TradeGuardXPositionState;
+    if (helper && typeof helper.stabilizeTrades === 'function') {
+      const result = helper.stabilizeTrades(trades, this.accountState.positions, {
+        emptyTradesStreak: this._emptyTradesStreak,
+        lastNonEmptyTradesAt: this._lastNonEmptyTradesAt
+      });
+      this._emptyTradesStreak = result?.state?.emptyTradesStreak ?? this._emptyTradesStreak;
+      this._lastNonEmptyTradesAt = result?.state?.lastNonEmptyTradesAt ?? this._lastNonEmptyTradesAt;
+      return Array.isArray(result?.trades) ? result.trades : [];
+    }
     const list = Array.isArray(trades) ? trades : [];
     if (list.length > 0) {
       this._emptyTradesStreak = 0;
@@ -1904,6 +2581,10 @@ class TradeMonitor {
   }
 
   _buildTradesDigest(trades) {
+    const helper = window.TradeGuardXPositionState;
+    if (helper && typeof helper.buildTradesDigest === 'function') {
+      return helper.buildTradesDigest(trades);
+    }
     if (!Array.isArray(trades) || trades.length === 0) return 'none';
     return trades
       .map((t) =>
@@ -1923,16 +2604,95 @@ class TradeMonitor {
   }
 
   _positionKey(pos) {
+    const helper = window.TradeGuardXPositionState;
+    if (helper && typeof helper.positionKey === 'function') {
+      return helper.positionKey(pos);
+    }
     if (!pos) return 'na';
-    if (pos.rowId) return `row:${pos.rowId}`;
     const symbol = (pos.symbol || '').toUpperCase();
     const side = (pos.side || '').toUpperCase();
-    const vol = pos.volume ?? '';
-    const entry = pos.entryPrice ?? '';
-    return [symbol, side, vol, entry].join('|');
+    const entryNum = Number(pos.entryPrice);
+    const entry = Number.isFinite(entryNum) ? Number(entryNum.toFixed(6)) : '';
+    // Keep key stable: volume can change due partial closes/formatting.
+    return [symbol, side, entry].join('|');
+  }
+
+  async _hydratePositionCache() {
+    const cache = window.TradeGuardXPositionCache;
+    if (!cache || typeof cache.load !== 'function') return;
+    const host = window.location.hostname;
+    try {
+      const snap = await cache.load(host);
+      if (!snap) return;
+      this._cachedPositionsSnapshot = snap;
+      // Restore the baseline the transitions evaluator compares against so a close
+      // that happened during the refresh gap still fires a TG_SYNC_CLOSED_TRADE event
+      // (nextPositions empty vs cached previousPositions non-empty → real close).
+      // Also pre-seed accountState.positions and _lastNonEmptyTradesAt so that if the
+      // broker DOM is still hydrating when the first scan fires, _stabilizeTrades'
+      // grace window preserves the cached positions instead of surfacing a phantom close.
+      if (Array.isArray(snap.positions) && snap.positions.length > 0) {
+        const restored = snap.positions.slice();
+        this._lastScanPositions = restored;
+        this._lastPositionsCount = restored.length;
+        this.accountState.positions = restored;
+        this._lastNonEmptyTradesAt = Date.now();
+        // Engage hydration gate: until the live broker DOM confirms these
+        // positions (or the grace window expires), suppress close transitions
+        // so a slow-loading SPA can't trigger phantom closes on every refresh.
+        this._cachedHydrationCount = restored.length;
+        this._cachedHydrationAt = Date.now();
+        this._domHydrationConfirmed = false;
+      }
+      // Restore first-seen timestamps so _stableClientTradeIdForPosition / openedAtMs
+      // match what we used before the refresh.
+      if (snap.firstSeenMs && typeof snap.firstSeenMs === 'object') {
+        for (const [key, ms] of Object.entries(snap.firstSeenMs)) {
+          if (Number.isFinite(ms)) this._positionFirstSeenMs.set(key, ms);
+        }
+      }
+      // Restore journal state so _captureJournalPositionEvents doesn't re-fire OPEN
+      // events for already-known positions after a refresh.
+      if (snap.journalStates && typeof snap.journalStates === 'object') {
+        for (const [key, state] of Object.entries(snap.journalStates)) {
+          if (!state || typeof state !== 'object') continue;
+          this._journalPositionState.set(key, {
+            key: state.key || key,
+            tradeUid: state.tradeUid || null,
+            clientTradeId: state.clientTradeId || null,
+            openedAtMs: Number(state.openedAtMs) || Date.now(),
+            seq: Number(state.seq) || 0,
+            pending: [],
+            timerId: null,
+            symbol: state.symbol || null,
+            side: state.side || null,
+            last: state.last && typeof state.last === 'object' ? { ...state.last } : {}
+          });
+        }
+      }
+    } catch (_err) {
+      /* ignore cache hydration failures — fresh session is still correct, just less efficient */
+    }
+  }
+
+  _persistPositionCache(positions) {
+    const cache = window.TradeGuardXPositionCache;
+    if (!cache || typeof cache.save !== 'function') return;
+    const host = window.location.hostname;
+    const snapshot = {
+      positions: cache.serializePositions(positions),
+      firstSeenMs: cache.serializeFirstSeen(this._positionFirstSeenMs),
+      journalStates: cache.serializeJournalStates(this._journalPositionState)
+    };
+    this._cachedPositionsSnapshot = { ...snapshot, updatedAt: Date.now() };
+    cache.save(host, snapshot);
   }
 
   _findClosedPositions(previousPositions, currentPositions) {
+    const helper = window.TradeGuardXPositionState;
+    if (helper && typeof helper.findClosedPositions === 'function') {
+      return helper.findClosedPositions(previousPositions, currentPositions);
+    }
     const prev = Array.isArray(previousPositions) ? previousPositions : [];
     const cur = Array.isArray(currentPositions) ? currentPositions : [];
     const currentCounts = new Map();
@@ -1953,12 +2713,34 @@ class TradeMonitor {
     return closed;
   }
 
-  _showTradeClosedPopup(trade, realizedDelta) {
+  _showTradeClosedPopup(trade, resolvedPnl) {
     if (!trade) return;
+    // Don't bother an unpaired user with trade-closed overlays — the extension
+    // has no rules loaded and no journal target, so the popup is just noise.
+    if (!this._isPaired) return;
+
+    // Dedupe: some brokers flicker the positions row (disappear → reappear → disappear)
+    // while finalizing a close, which would otherwise surface two overlays back-to-back
+    // for the same trade. Suppress within a short window keyed on the stable position key.
+    const dedupeKey = this._positionKey(trade);
+    const now = Date.now();
+    const DEDUPE_WINDOW_MS = 60_000;
+    const last = this._closedPopupRecent.get(dedupeKey);
+    if (last != null && now - last < DEDUPE_WINDOW_MS) {
+      return;
+    }
+    this._closedPopupRecent.set(dedupeKey, now);
+    // Evict stale entries so the map doesn't grow unbounded on long sessions.
+    for (const [k, ts] of this._closedPopupRecent) {
+      if (now - ts >= DEDUPE_WINDOW_MS) this._closedPopupRecent.delete(k);
+    }
+
+    // Caller passes the sign-corrected P&L from positionTransitions.syncClosedTradePnl
+    // (which already handles the funded-account reconciliation-lag sign-flip). Fall back
+    // to the row's own profit column if caller passed null.
     const fallbackPnl = Number.isFinite(Number(trade.profit)) ? Number(trade.profit) : null;
-    const delta = Number.isFinite(Number(realizedDelta)) ? Number(realizedDelta) : null;
-    const deltaIsMeaningful = delta != null && Math.abs(delta) >= 0.01;
-    const pnlValue = deltaIsMeaningful ? delta : fallbackPnl;
+    const resolved = Number.isFinite(Number(resolvedPnl)) ? Number(resolvedPnl) : null;
+    const pnlValue = resolved != null ? resolved : fallbackPnl;
     const outcome = pnlValue == null ? 'CLOSED' : pnlValue > 0 ? 'PROFIT' : pnlValue < 0 ? 'LOSS' : 'CLOSED';
     const payload = {
       outcome,
@@ -1986,6 +2768,7 @@ class TradeMonitor {
   refreshAccountState() {
     if (!this.detector) return;
     const previousPositions = Array.isArray(this._lastScanPositions) ? this._lastScanPositions : [];
+    const openSeenBeforeScan = new Map(this._positionFirstSeenMs);
 
     const identityContainer = this._resolveIdentityContainer();
     if (identityContainer) {
@@ -2000,13 +2783,13 @@ class TradeMonitor {
     }
 
     const mapped = this._mappedSelectors || {};
-    const mappedOnly = this._isMappedCrawlMode();
-    const equity = mappedOnly
-      ? this._readMappedNumber(mapped.equity)
-      : (this._readMappedNumber(mapped.equity) ?? this.detector.detectEquity(document.body));
-    const balance = mappedOnly
-      ? this._readMappedNumber(mapped.balance)
-      : (this._readMappedNumber(mapped.balance) ?? this.detector.detectBalance(document.body));
+    // Mapped selectors first; detector only when mapped read returns null (same for all hosts).
+    const domEquity =
+      this._readMappedNumber(mapped.equity) ??
+      (typeof this.detector.detectEquity === 'function' ? this.detector.detectEquity(document.body) : null);
+    const domBalance =
+      this._readMappedNumber(mapped.balance) ??
+      (typeof this.detector.detectBalance === 'function' ? this.detector.detectBalance(document.body) : null);
 
     if (!this._tradesObserver) {
       this.startTradesObservation();
@@ -2014,7 +2797,40 @@ class TradeMonitor {
 
     this._ensureOrderTrackerBound();
 
-    const activeTrades = this._stabilizeTrades(this.getLiveTrades());
+    // Compute tab context up front so we can substitute cached positions when the user
+    // is viewing Close/History/Pending (where the scan returns empty). Without the
+    // substitution, hedging prevention silently passes and funded-mode equity
+    // under-reports floating loss.
+    let tradeTabContext =
+      typeof this.detector.getTradeTabContext === 'function'
+        ? this.detector.getTradeTabContext(this._getTradesScanRoot())
+        : 'unknown';
+    if (this._lastTabClickContext) {
+      tradeTabContext = this._lastTabClickContext.ctx;
+    }
+    const suppressPositionTransitions = tradeTabContext === 'closed' || tradeTabContext === 'pending';
+
+    // Capture the raw DOM scan result before _stabilizeTrades substitutes from
+    // cache — only the raw result tells us whether the broker DOM has finished
+    // hydrating after a page refresh. The post-stabilize result can be cached
+    // positions filling in for an empty live scan, which would falsely look
+    // like "DOM is up" to the post-refresh hydration gate below.
+    const rawLiveTrades = this.getLiveTrades();
+    const liveScanFoundPositions = Array.isArray(rawLiveTrades) && rawLiveTrades.length > 0;
+    let activeTrades = this._stabilizeTrades(rawLiveTrades);
+    // On the Close/Pending tab, the tracker's row discovery can pick up closed-trade
+    // rows mid-render (detector's DOM-based getTradeTabContext is unreliable on brokers
+    // that don't mark active tabs with aria/data/class). Our click-tracked signal is
+    // authoritative — when it says "closed/pending", anything the scan produces is
+    // noise. Always prefer the cached snapshot.
+    if (
+      suppressPositionTransitions &&
+      Array.isArray(this._cachedPositionsSnapshot?.positions) &&
+      this._cachedPositionsSnapshot.positions.length > 0
+    ) {
+      activeTrades = this._cachedPositionsSnapshot.positions.slice();
+    }
+    this._syncPositionOpenTimes(activeTrades);
     if (!Array.isArray(activeTrades) || activeTrades.length === 0) {
       this._lastTradesDigest = 'none';
     }
@@ -2024,10 +2840,29 @@ class TradeMonitor {
       this.persistOrderProfileIfNeeded();
     }
 
-    const startingEquity =
-      this.accountState.startingEquity || (equity != null ? equity : balance) || this.accountState.startingEquity;
+    const fundedAccount = this._fundedAccountState?.account || null;
+    const fundedClosedPnlToday = Number(this._fundedAccountState?.closedPnlToday) || 0;
+    const positionsForResolver = activeTrades;
+    const resolver = window.TradeGuardXEquityResolver;
+    const resolved = (resolver && typeof resolver.resolveEquity === 'function')
+      ? resolver.resolveEquity({
+          equityMode: fundedAccount?.equityMode || 'live',
+          domEquity,
+          domBalance,
+          fundedState: fundedAccount,
+          closedPnlToday: fundedClosedPnlToday,
+          positions: positionsForResolver
+        })
+      : null;
 
-    const floatingLoss = this.estimateFloatingLoss(equity, balance, startingEquity);
+    const equity = resolved?.equity ?? domEquity;
+    const balance = resolved?.balance ?? domBalance;
+    const startingEquity = resolved?.startingEquity
+      ?? this.accountState.startingEquity
+      ?? (equity != null ? equity : balance)
+      ?? this.accountState.startingEquity;
+
+    const floatingLoss = resolved?.floatingLoss ?? this.estimateFloatingLoss(equity, balance, startingEquity);
 
     const nextPositions = activeTrades.map((t) => ({
       rowId: t.rowId ?? null,
@@ -2044,35 +2879,104 @@ class TradeMonitor {
     this.accountState.positions = nextPositions;
 
     const effectiveEquity = equity ?? balance;
-    const positionsCount = Array.isArray(activeTrades) ? activeTrades.length : 0;
 
-    if (
-      this._lastPositionsCount != null &&
-      this._lastEquity != null &&
-      effectiveEquity != null &&
-      positionsCount < this._lastPositionsCount &&
-      effectiveEquity < this._lastEquity
-    ) {
-      if (chrome?.runtime?.id && chrome.runtime.sendMessage) {
-        chrome.runtime.sendMessage({ type: 'TG_POSITION_CLOSED_LOSS' });
+    // Post-refresh hydration gate. After init we restored cached positions into
+    // _lastScanPositions; if the broker SPA hasn't repopulated the DOM yet,
+    // _stabilizeTrades' 1.2s grace window expires and nextPositions becomes []
+    // which would otherwise look like a close. Suppress transitions until:
+    //   - the RAW live DOM scan returns ANY positions (DOM truly caught up;
+    //     do NOT use nextPositions because stabilize may have substituted
+    //     cached positions for an empty raw scan), OR
+    //   - HYDRATION_GRACE_MS has elapsed (allow legitimate closes during the
+    //     refresh gap to fire eventually).
+    const HYDRATION_GRACE_MS = 30_000;
+    if (!this._domHydrationConfirmed) {
+      if (liveScanFoundPositions) {
+        this._domHydrationConfirmed = true;
+      } else if (Date.now() - this._cachedHydrationAt > HYDRATION_GRACE_MS) {
+        this._domHydrationConfirmed = true;
       }
     }
-    if (this._lastPositionsCount != null && positionsCount < this._lastPositionsCount) {
-      const closed = this._findClosedPositions(previousPositions, nextPositions);
-      const realizedDelta =
-        this._lastEquity != null && effectiveEquity != null ? effectiveEquity - this._lastEquity : null;
-      this._showTradeClosedPopup(closed[0] || previousPositions[0] || null, realizedDelta);
+    const suppressByHydration =
+      !this._domHydrationConfirmed &&
+      this._cachedHydrationCount > 0 &&
+      nextPositions.length === 0;
+
+    const transitions = window.TradeGuardXPositionTransitions?.evaluatePositionTransitions?.({
+      previousPositions,
+      nextPositions,
+      lastPositionsCount: this._lastPositionsCount,
+      lastEquity: this._lastEquity,
+      effectiveEquity,
+      suppressPositionTransitions: suppressPositionTransitions || suppressByHydration
+    }) || {
+      positionsCount: Array.isArray(activeTrades) ? activeTrades.length : 0,
+      shouldUpdateLastPositionsCount: !suppressPositionTransitions,
+      sendClosedLossSignal: false,
+      closedTrade: null,
+      realizedDelta: null,
+      syncClosedTradePnl: null,
+      openedDelta: 0
+    };
+    const closedJournalState = transitions.closedTrade
+      ? this._findJournalStateForPosition(transitions.closedTrade)
+      : null;
+    // Pass the combined suppression flag so journal CLOSE events also pause
+    // during the post-refresh hydration window — otherwise we'd still send
+    // TG_SYNC_CLOSED_TRADE to the backend even though the transition path
+    // above is gated, producing phantom dashboard rows on every refresh.
+    this._captureJournalPositionEvents(
+      previousPositions,
+      nextPositions,
+      suppressPositionTransitions || suppressByHydration
+    );
+
+    if (transitions.sendClosedLossSignal && chrome?.runtime?.id && chrome.runtime.sendMessage) {
+      chrome.runtime.sendMessage({ type: 'TG_POSITION_CLOSED_LOSS' });
     }
-    if (
-      this._lastPositionsCount != null &&
-      positionsCount > this._lastPositionsCount &&
-      chrome?.runtime?.id &&
-      chrome.runtime.sendMessage
-    ) {
-      const delta = positionsCount - this._lastPositionsCount;
-      chrome.runtime.sendMessage({ type: 'TG_POSITIONS_OPENED', payload: { delta } });
+    if (transitions.closedTrade && chrome?.runtime?.id && chrome.runtime.sendMessage) {
+      try {
+        const closedKey = this._positionKey(transitions.closedTrade);
+        const openedAtMs =
+          openSeenBeforeScan.get(closedKey) ||
+          closedJournalState?.openedAtMs ||
+          this._positionFirstSeenMs.get(closedKey) ||
+          null;
+        const dedupeClientTradeId =
+          closedJournalState?.clientTradeId ||
+          this._stableClientTradeIdForPosition(transitions.closedTrade, openedAtMs);
+        chrome.runtime.sendMessage({
+          type: 'TG_SYNC_CLOSED_TRADE',
+          payload: {
+            trade: {
+              clientTradeId: dedupeClientTradeId,
+              symbol: transitions.closedTrade.symbol,
+              side: transitions.closedTrade.side,
+              volume: transitions.closedTrade.volume,
+              entryPrice: transitions.closedTrade.entryPrice,
+              currentPrice: transitions.closedTrade.currentPrice,
+              pnl: transitions.syncClosedTradePnl,
+              openedAt: openedAtMs ? new Date(openedAtMs).toISOString() : null,
+              closedAt: Date.now()
+            }
+          }
+        });
+      } catch (_e) {
+        /* ignore */
+      }
+      // Funded mode: refresh closedPnlToday so the resolver picks up the new realized P&L
+      // before the next scan tick.
+      if (this._fundedAccountState?.account?.equityMode === 'funded') {
+        this._loadFundedAccountState().catch(() => {});
+      }
+      this._showTradeClosedPopup(transitions.closedTrade, transitions.syncClosedTradePnl);
     }
-    this._lastPositionsCount = positionsCount;
+    if (transitions.openedDelta > 0 && chrome?.runtime?.id && chrome.runtime.sendMessage) {
+      chrome.runtime.sendMessage({ type: 'TG_POSITIONS_OPENED', payload: { delta: transitions.openedDelta } });
+    }
+    if (transitions.shouldUpdateLastPositionsCount) {
+      this._lastPositionsCount = transitions.positionsCount;
+    }
     this._lastEquity = effectiveEquity != null ? effectiveEquity : this._lastEquity;
 
     this.accountState = {
@@ -2088,14 +2992,41 @@ class TradeMonitor {
     }
     const mappedBuyButtons = this._queryMappedElements(mapped.buy_button);
     const mappedSellButtons = this._queryMappedElements(mapped.sell_button);
-    const detectorButtons = !mappedOnly
-      ? (this.detector.detectTradeButtons(document.body) || { buyButtons: [], sellButtons: [] })
-      : { buyButtons: [], sellButtons: [] };
+    const detectorButtons =
+      (typeof this.detector.detectTradeButtons === 'function'
+        ? this.detector.detectTradeButtons(document.body)
+        : null) || { buyButtons: [], sellButtons: [] };
     const buyButtons = mappedBuyButtons.length > 0 ? mappedBuyButtons : detectorButtons.buyButtons;
     const sellButtons = mappedSellButtons.length > 0 ? mappedSellButtons : detectorButtons.sellButtons;
     const hasTradeButtons = (buyButtons?.length || 0) + (sellButtons?.length || 0) > 0;
     const hasPositions = Array.isArray(activeTrades) && activeTrades.length > 0;
     this.notifyHookedIfNeeded(equity, balance, hasPositions, hasTradeButtons);
+
+    this.getConfig().then((c) => {
+      this._cachedRiskConfig = c;
+    });
+
+    // Persist the trusted snapshot so next reload or tab-switch can restore it.
+    // We only write on non-suppressed ticks:
+    //   - viewing the Close tab never wipes the cache (a genuine close is
+    //     observed on the Open tab via positionsCount dropping)
+    //   - during the post-refresh hydration window we MUST NOT overwrite the
+    //     cached [trade] with [] — otherwise the next refresh would have
+    //     nothing to gate against and phantom closes would return.
+    if (!suppressPositionTransitions && !suppressByHydration) {
+      this._persistPositionCache(nextPositions);
+    }
+  }
+
+  _logMappingQuality(host, selectors) {
+    if (!host || this._mappingQualityWarnedHosts.has(host)) return;
+    const assess = window.TradeGuardXMappingQuality?.assessSelectors;
+    if (typeof assess !== 'function') return;
+    const report = assess(selectors);
+    if (!report || report.ok !== false || !Array.isArray(report.warnings) || report.warnings.length === 0) return;
+    this._mappingQualityWarnedHosts.add(host);
+    const lines = report.warnings.map((w) => `  - [${w.severity}] ${w.code}: ${w.message}`);
+    console.warn(`[TradeGuardX] Mapping quality warnings for ${host}:\n${lines.join('\n')}`);
   }
 
   async loadSavedOrderIdentity() {
@@ -2106,72 +3037,83 @@ class TradeMonitor {
           resolve();
           return;
         }
-        this._loadedSelectors = selectors;
-        this._mappedSelectors = selectors;
-        const identity = selectors.order_details_identity;
+        const normalizedSelectors = this._normalizeMappedSelectorPayload(selectors);
+        this._loadedSelectors = normalizedSelectors;
+        this._mappedSelectors = normalizedSelectors;
+        this._logMappingQuality(window.location.hostname, normalizedSelectors);
+        const mapHelper = window.TradeGuardXMappingStore;
         const containerSelector =
-          identity?.selector ||
-          selectors.positions_table ||
-          (identity?.fieldSelectors?.container ? identity.fieldSelectors.container : null);
+          mapHelper?.getContainerSelector?.(normalizedSelectors) ||
+          normalizedSelectors.order_details_identity?.selector ||
+          normalizedSelectors.positions_table ||
+          null;
         if (containerSelector && typeof this.detector.setPreferredPositionsSelector === 'function') {
           this.detector.setPreferredPositionsSelector(containerSelector);
           this._lastSavedOrderSelector = containerSelector;
           this._identityLocked = true;
         }
-        // Ensure/repair order_profile field bindings from identity field selectors when missing.
-        if (identity?.fieldSelectors) {
-          const rowFields = new Set(this._rowFieldKeys());
-          const aliases = {
-            pnl: 'pnl',
-            profit: 'pnl',
-            pl: 'pnl',
-            closeButton: 'closeButton',
-            close: 'closeButton',
-            stopLoss: 'stopLoss',
-            sl: 'stopLoss',
-            takeProfit: 'takeProfit',
-            tp: 'takeProfit',
-            currentPrice: 'currentPrice',
-            markPrice: 'currentPrice',
-            entryPrice: 'entryPrice',
-            openPrice: 'entryPrice',
-            volume: 'volume',
-            size: 'volume',
-            qty: 'volume',
-            side: 'side',
-            symbol: 'symbol'
-          };
-          const currentProfile = this._loadedSelectors.order_profile || {
-            version: 1,
-            host: window.location.hostname,
-            strictMappedMode: true,
-            rowSelector: null,
-            rowSelectorHint: null,
-            headerAliases: {},
-            headerMap: {},
-            fieldBindings: {},
-            negativeRowPatterns: [],
-            source: 'guided_mapping',
-            lastVerifiedAt: Date.now()
-          };
-          const mergedBindings = { ...(currentProfile.fieldBindings || {}) };
-          for (const [k, v] of Object.entries(identity.fieldSelectors)) {
-            const key = aliases[k] || k;
-            if (!rowFields.has(key) || !v || typeof v !== 'string') continue;
-            if (!mergedBindings[key]?.selector) {
-              mergedBindings[key] = { selector: v, confidence: 0.95, source: 'guided_mapping' };
-            }
-          }
-          this._loadedSelectors.order_profile = {
-            ...currentProfile,
-            strictMappedMode: true,
-            fieldBindings: mergedBindings,
-            lastVerifiedAt: Date.now()
-          };
+        const closedSel = normalizedSelectors.closed_trades_section;
+        const openSel = containerSelector;
+        const badClosed =
+          closedSel &&
+          openSel &&
+          this._closedTradesSectionWrapsOpenContainer(closedSel, openSel);
+        if (badClosed && typeof this.detector.setClosedTradesSectionSelector === 'function') {
+          this.detector.setClosedTradesSectionSelector(null);
+        } else if (closedSel && !badClosed && typeof this.detector.setClosedTradesSectionSelector === 'function') {
+          this.detector.setClosedTradesSectionSelector(closedSel);
+        } else if (typeof this.detector.setClosedTradesSectionSelector === 'function') {
+          this.detector.setClosedTradesSectionSelector(null);
         }
+        const tabSelectors = mapHelper?.getTradeTabSelectors?.(normalizedSelectors) || {
+          open: normalizedSelectors.open_positions_tab || null,
+          pending: normalizedSelectors.pending_positions_tab || null,
+          closed: normalizedSelectors.closed_positions_tab || null
+        };
+        if (typeof this.detector.setTradeTabSelectors === 'function') {
+          this.detector.setTradeTabSelectors(tabSelectors);
+        }
+        this._installTabClickTracking(tabSelectors);
+        const mergedProfile =
+          mapHelper?.mergeOrderProfileFromIdentity?.({
+            selectors: this._loadedSelectors,
+            rowFieldKeys: this._rowFieldKeys(),
+            host: window.location.hostname
+          }) || null;
+        if (mergedProfile) this._loadedSelectors.order_profile = mergedProfile;
         resolve();
       });
     });
+  }
+
+  _installTabClickTracking(tabSelectors) {
+    if (this._tabClickListener) {
+      document.removeEventListener('click', this._tabClickListener, true);
+      this._tabClickListener = null;
+    }
+    const open = tabSelectors?.open || null;
+    const closed = tabSelectors?.closed || null;
+    const pending = tabSelectors?.pending || null;
+    if (!open && !closed && !pending) return;
+    const matches = (el, sel) => {
+      if (!sel) return false;
+      try {
+        return !!el.closest(sel);
+      } catch (_err) {
+        return false;
+      }
+    };
+    const listener = (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      let ctx = null;
+      if (matches(target, open)) ctx = 'open';
+      else if (matches(target, closed)) ctx = 'closed';
+      else if (matches(target, pending)) ctx = 'pending';
+      if (ctx) this._lastTabClickContext = { ctx, at: Date.now() };
+    };
+    this._tabClickListener = listener;
+    document.addEventListener('click', listener, true);
   }
 
   captureAndPersistOrderIdentity() {
@@ -2239,6 +3181,25 @@ class TradeMonitor {
     });
   }
 
+  /**
+   * Saved "closed trades" mapping must not equal or wrap the open positions container,
+   * or every row would be treated as closed history.
+   */
+  _closedTradesSectionWrapsOpenContainer(closedSel, openSel) {
+    if (!closedSel || !openSel || typeof closedSel !== 'string' || typeof openSel !== 'string') return false;
+    const a = closedSel.trim();
+    const b = openSel.trim();
+    if (!a || !b || a === b) return true;
+    try {
+      const c = document.querySelector(a);
+      const o = document.querySelector(b);
+      if (!c || !o) return false;
+      return c === o || c.contains(o);
+    } catch (_e) {
+      return false;
+    }
+  }
+
   _resolveIdentityContainer() {
     const selector =
       this._lastSavedOrderSelector ||
@@ -2269,13 +3230,261 @@ class TradeMonitor {
     return pnl < 0 ? -pnl : 0;
   }
 
+  async _loadPairingState() {
+    if (!chrome?.runtime?.id || !chrome.runtime.sendMessage) {
+      this._isPaired = false;
+      return false;
+    }
+    return new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ type: 'TG_GET_PAIRING_STATE' }, (resp) => {
+          if (chrome.runtime?.lastError) {
+            this._isPaired = false;
+            resolve(false);
+            return;
+          }
+          this._isPaired = !!resp?.connected;
+          resolve(this._isPaired);
+        });
+      } catch (_e) {
+        this._isPaired = false;
+        resolve(false);
+      }
+    });
+  }
+
+  async _loadFundedAccountState() {
+    if (!chrome?.runtime?.id || !chrome.runtime.sendMessage) return null;
+    if (this._fundedAccountFetchInflight) return this._fundedAccountFetchInflight;
+    const p = new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ type: 'TG_GET_ACCOUNT_CONFIG' }, (resp) => {
+          if (chrome.runtime?.lastError || !resp || resp.success === false) {
+            resolve(null);
+            return;
+          }
+          this._fundedAccountState = {
+            accountId: resp.accountId || null,
+            account: resp.account || null,
+            closedPnlToday: Number.isFinite(Number(resp.closedPnlToday)) ? Number(resp.closedPnlToday) : 0,
+            closedTradesToday: Number.isFinite(Number(resp.closedTradesToday)) ? Number(resp.closedTradesToday) : 0,
+            dailyWindowStartMs: Number.isFinite(Number(resp.dailyWindowStartMs)) ? Number(resp.dailyWindowStartMs) : null,
+            needsReconcile: !!resp.needsReconcile,
+            fetchedAt: Date.now()
+          };
+          this._maybeApplyDailyReset().catch(() => {});
+          resolve(this._fundedAccountState);
+        });
+      } catch (_e) {
+        resolve(null);
+      }
+    });
+    this._fundedAccountFetchInflight = p;
+    p.finally(() => { this._fundedAccountFetchInflight = null; });
+    return p;
+  }
+
+  async _maybeApplyDailyReset() {
+    const state = this._fundedAccountState;
+    const account = state?.account;
+    if (!account || account.equityMode !== 'funded') return;
+    if (!chrome?.runtime?.id || !chrome.runtime.sendMessage) return;
+    const floatingPnl = this._sumFloatingPnl(this.accountState?.positions);
+    const closedPnlToday = Number(state.closedPnlToday) || 0;
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage(
+        { type: 'TG_MAYBE_APPLY_DAILY_RESET', payload: { floatingPnl, closedPnlToday } },
+        (resp) => {
+          if (chrome.runtime?.lastError || !resp || resp.success === false) {
+            resolve(null);
+            return;
+          }
+          if (resp.account) {
+            this._fundedAccountState = {
+              ...this._fundedAccountState,
+              account: resp.account,
+              closedPnlToday: 0
+            };
+          }
+          resolve(resp.account || null);
+        }
+      );
+    });
+  }
+
+  _sumFloatingPnl(positions) {
+    if (!Array.isArray(positions)) return 0;
+    let sum = 0;
+    for (const p of positions) {
+      const v = Number(p?.profit);
+      if (Number.isFinite(v)) sum += v;
+    }
+    return sum;
+  }
+
+  /**
+   * Compute the absolute-dollar limit for a percent/amount rule, given a base.
+   * Returns null when the rule is disabled or the numbers don't resolve.
+   */
+  _resolveLimitAmount({ enabled, type, pct, amount, base }) {
+    if (enabled !== true) return null;
+    if (type === 'amount') {
+      const v = Number(amount);
+      return Number.isFinite(v) && v > 0 ? v : null;
+    }
+    const p = Number(pct);
+    const b = Number(base);
+    if (!Number.isFinite(p) || p <= 0) return null;
+    if (!Number.isFinite(b) || b <= 0) return null;
+    return (b * p) / 100;
+  }
+
+  /**
+   * Remaining loss capacity for the pre-trade prompt.
+   *
+   * Both limits are computed off the current (user-declared) balance so they
+   * scale whenever the user updates it — a $4,987.06 balance with 5% / 10%
+   * rules yields $249.35 daily and $498.71 total, and updating balance to
+   * $5,000 immediately rebumps both to $250 / $500.
+   *
+   * For fixed-amount rules the configured dollar value is still used as-is.
+   * Floating loss (from open positions) is subtracted from the daily cap so
+   * the number reflects what the user can still lose right now.
+   *
+   *   daily = max(0, (balance × dailyPct / 100 OR dailyAmount) - floatingLoss)
+   *   total = balance × totalPct / 100 OR totalAmount
+   */
+  _computeRemainingLimits(config, balance, _accountSize, floatingLoss) {
+    const baseBalance = Number(balance) > 0 ? Number(balance) : 0;
+    const rawDaily = this._resolveLimitAmount({
+      enabled: config?.dailyLossRuleEnabled,
+      type: config?.dailyLossLimitType,
+      pct: config?.dailyLossLimitPct,
+      amount: config?.dailyLossLimitAmount,
+      base: baseBalance
+    });
+    const rawTotal = this._resolveLimitAmount({
+      enabled: config?.maxTotalLossEnabled,
+      type: config?.maxTotalLossType,
+      pct: config?.maxTotalLossPct,
+      amount: config?.maxTotalLossAmount,
+      base: baseBalance
+    });
+    const flLoss = Number(floatingLoss) > 0 ? Number(floatingLoss) : 0;
+    return {
+      dailyLossLimit: rawDaily != null ? Math.max(0, rawDaily - flLoss) : null,
+      totalLossLimit: rawTotal != null ? Math.max(0, rawTotal) : null,
+    };
+  }
+
+  /**
+   * Show the pre-trade confirmation overlay. Resolves with 'confirm' | 'cancel'.
+   * Only the confirm path re-fires the click (via __tgPreTradeConfirmed + __tgAllowNextClick),
+   * so rule evaluation still runs on the re-fire.
+   */
+  _runPreTradeConfirmation(targetEl, side, symbol, config) {
+    return new Promise((resolve) => {
+      if (typeof window === 'undefined' || typeof window.showPreTradeConfirmation !== 'function') {
+        resolve('confirm');
+        return;
+      }
+
+      const state = this._fundedAccountState;
+      const account = state?.account || null;
+      const isFunded = account?.equityMode === 'funded';
+
+      const balance = isFunded
+        ? Number(account?.currentBalance ?? account?.dailyStartingBalance ?? 0) || null
+        : (this.accountState?.balance ?? this.accountState?.equity ?? null);
+
+      const accountSize = Number(config?.accountSize) || Number(account?.accountSize) || balance || 0;
+      const floatingLoss = Number(this.accountState?.floatingLoss) || 0;
+
+      const { dailyLossLimit, totalLossLimit } =
+        this._computeRemainingLimits(config, balance, accountSize, floatingLoss);
+
+      const maxTradesPerDay =
+        config?.maxTradesPerDayEnabled === true && Number(config?.maxTradesPerDay) > 0
+          ? Number(config.maxTradesPerDay)
+          : null;
+
+      const tradesToday = Number(state?.closedTradesToday) || 0;
+      const closedPnlToday = Number(state?.closedPnlToday) || 0;
+
+      window.showPreTradeConfirmation({
+        side,
+        symbol,
+        balance,
+        dailyLossLimit,
+        totalLossLimit,
+        maxTradesPerDay,
+        tradesToday,
+        closedPnlToday,
+        allowBalanceEdit: isFunded,
+        onConfirm: () => resolve('confirm'),
+        onCancel: () => resolve('cancel'),
+        onUpdateBalance: async (newBalance) => {
+          if (!chrome?.runtime?.id || !chrome.runtime.sendMessage) {
+            throw new Error('Extension not connected');
+          }
+          const updatedAccount = await new Promise((res, rej) => {
+            try {
+              chrome.runtime.sendMessage(
+                { type: 'TG_UPDATE_DECLARED_BALANCE', payload: { balance: newBalance } },
+                (resp) => {
+                  if (chrome.runtime?.lastError) {
+                    rej(new Error(chrome.runtime.lastError.message || 'Could not save'));
+                    return;
+                  }
+                  if (!resp || resp.success === false) {
+                    rej(new Error(resp?.error || 'Could not save balance'));
+                    return;
+                  }
+                  res(resp.account || null);
+                }
+              );
+            } catch (e) {
+              rej(e);
+            }
+          });
+
+          if (updatedAccount) {
+            this._fundedAccountState = {
+              ...this._fundedAccountState,
+              account: updatedAccount,
+              fetchedAt: Date.now()
+            };
+          }
+
+          const refreshedAccount = updatedAccount || this._fundedAccountState?.account;
+          const newBal = Number(refreshedAccount?.currentBalance ?? newBalance) || newBalance;
+          const newAccountSize = Number(config?.accountSize) || Number(refreshedAccount?.accountSize) || newBal;
+          const newFloatingLoss = Number(this.accountState?.floatingLoss) || 0;
+          const remaining = this._computeRemainingLimits(config, newBal, newAccountSize, newFloatingLoss);
+          return {
+            balance: newBal,
+            dailyLossLimit: remaining.dailyLossLimit,
+            totalLossLimit: remaining.totalLossLimit,
+            maxTradesPerDay,
+            tradesToday,
+            closedPnlToday,
+          };
+        }
+      });
+
+      void targetEl;
+    });
+  }
+
   notifyHookedIfNeeded(equity, balance, hasPositions = false, hasTradeButtons = false) {
     if (this.hooked) return;
     const hasEquityOrBalance = equity != null || balance != null;
     if (!hasEquityOrBalance && !hasPositions && !hasTradeButtons) return;
     this.hooked = true;
-    if (typeof showToast === 'function') {
-      showToast('Trade GuardX: trading UI detected, applying rules.', 'info');
+    // Only surface the "active" toast when the user is actually paired —
+    // otherwise we'd be claiming to enforce rules that aren't loaded.
+    if (this._isPaired && typeof showToast === 'function') {
+      showToast('TradeGuardX active. Rules enforced.', 'info');
     }
     if (chrome?.runtime?.id && chrome.runtime.sendMessage) {
       chrome.runtime.sendMessage({
@@ -2300,12 +3509,12 @@ class TradeMonitor {
     const bind = () => {
       if (!this.detector) return;
       const mapped = this._mappedSelectors || {};
-      const mappedOnly = this._isMappedCrawlMode();
       const mappedBuyButtons = this._queryMappedElements(mapped.buy_button);
       const mappedSellButtons = this._queryMappedElements(mapped.sell_button);
-      const detected = !mappedOnly
-        ? (this.detector.detectTradeButtons(document.body) || { buyButtons: [], sellButtons: [] })
-        : { buyButtons: [], sellButtons: [] };
+      const detected =
+        (typeof this.detector.detectTradeButtons === 'function'
+          ? this.detector.detectTradeButtons(document.body)
+          : null) || { buyButtons: [], sellButtons: [] };
       let buyButtons = mappedBuyButtons.length > 0 ? mappedBuyButtons : detected.buyButtons;
       let sellButtons = mappedSellButtons.length > 0 ? mappedSellButtons : detected.sellButtons;
       buyButtons = this._innermostOnly(buyButtons);
@@ -2316,12 +3525,26 @@ class TradeMonitor {
         el.__tgBound = true;
         if (side === 'BUY') this._buyButtonEl = el;
         if (side === 'SELL') this._sellButtonEl = el;
+        tgHedgingLog('bind_trade_button', {
+          side,
+          tag: el.tagName,
+          id: el.id || null,
+          className: typeof el.className === 'string' ? el.className.slice(0, 120) : null
+        });
         el.addEventListener(
           'click',
           (e) => this.onTradeClick(e, side),
-          false
+          true
         );
       };
+
+      tgHedgingLog('attachTradeButtons_summary', {
+        mappingComplete: this._isMappedCrawlMode(),
+        buyFromMapped: mappedBuyButtons.length,
+        sellFromMapped: mappedSellButtons.length,
+        buyBound: buyButtons.length,
+        sellBound: sellButtons.length
+      });
 
       buyButtons.forEach((el) => attach(el, 'BUY'));
       sellButtons.forEach((el) => attach(el, 'SELL'));
@@ -2383,9 +3606,16 @@ class TradeMonitor {
         ? this.calculateMaxAllowedVolume(balance, trade.entryPrice, trade.stopLoss, riskPercent)
         : null;
       const maxVolStr = maxVol != null ? ` Use at most ${maxVol.toFixed(2)} lots for this SL.` : '';
-      showWarningOverlay({
+      this._journalEmitRuleBlock({
+        side: trade.side || null,
+        symbol: trade.symbol || null,
+        reason: `Over risk reminder: ${symbol} risks ${risk.toFixed(2)} > allowed ${maxRisk.toFixed(2)} (${riskPercent}% of balance).`,
         title: 'Over risk reminder',
-        message: `Your current position (${symbol}) risks $${risk.toFixed(2)}, which exceeds your max allowed $${maxRisk.toFixed(2)} (${riskPercent}% of balance). Consider: reducing lot size, moving SL closer to entry, or closing the position.${maxVolStr} This reminder repeats every minute until risk is within your limit.`,
+        ruleSlug: 'risk-per-trade'
+      });
+      showWarningOverlay({
+        title: 'Risk too high',
+        message: `${symbol} risks $${risk.toFixed(2)} — your limit is $${maxRisk.toFixed(2)} (${riskPercent}% of balance). Risk exceeded by ${((risk / maxRisk) * 100 - 100).toFixed(0)}%. Reduce size or tighten SL now.${maxVolStr}`,
         highlight: true
       });
       return;
@@ -2418,21 +3648,103 @@ class TradeMonitor {
     return match ? (this.detector.normalizeSymbol ? this.detector.normalizeSymbol(match[1] || match[0]) : match[1]) : null;
   }
 
-  checkHedging(side, symbol) {
-    const positions = this.accountState.positions || [];
-    if (!symbol) return { allowed: true }; // Cannot verify hedging without symbol
-    const norm = this.detector?.normalizeSymbol || ((s) => (s || '').replace(/\//g, '').toUpperCase());
-    const symbolNorm = norm(symbol);
-    const oppositeSide = side === 'BUY' ? 'SELL' : 'BUY';
-    for (const pos of positions) {
-      if (norm(pos.symbol) === symbolNorm && pos.side === oppositeSide) {
-        return {
-          allowed: false,
-          reason: `Hedging not allowed. You have an open ${pos.side} on ${pos.symbol}. Close it first.`
-        };
+  /**
+   * If DOM scraping picked a column label (PROFIT, VOLUME) or nothing, align with open positions /
+   * wider page text — same source of truth as the popup (tracker positions), not DB mapping.
+   */
+  _refineSymbolForHedging(candidate) {
+    const det = this.detector;
+    const isJunk = (s) =>
+      !s ||
+      (typeof det?.isInvalidSymbolToken === 'function' && det.isInvalidSymbolToken(s));
+    const pos = Array.isArray(this.accountState.positions) ? this.accountState.positions : [];
+    if (!isJunk(candidate)) return candidate;
+    if (pos.length === 1 && pos[0].symbol) {
+      tgHedgingLog('resolve_symbol_refine', {
+        reason: 'ignored_junk_used_single_open_position',
+        was: candidate || null,
+        now: pos[0].symbol
+      });
+      return pos[0].symbol;
+    }
+    if (typeof det?.getBestSymbolFromText === 'function') {
+      const wide = det.getBestSymbolFromText(
+        (document.body?.innerText || '').replace(/\s+/g, ' ').slice(0, 20000)
+      );
+      if (wide && !isJunk(wide)) {
+        tgHedgingLog('resolve_symbol_refine', {
+          reason: 'wide_body_text',
+          was: candidate || null,
+          now: wide
+        });
+        return wide;
       }
     }
-    return { allowed: true };
+    return candidate;
+  }
+
+  /**
+   * Symbol for hedging checks: order panel first, then walk up DOM (brokers vary where instrument is shown).
+   */
+  _resolveSymbolForOrderClick(clickedEl) {
+    const mapped = this._mappedSelectors || {};
+    if (mapped.order_instrument) {
+      const fromMap = this._readMappedOrderInstrumentText(mapped.order_instrument);
+      if (fromMap) {
+        const refined = this._refineSymbolForHedging(fromMap);
+        const sym = refined || fromMap;
+        tgHedgingLog('resolve_symbol', {
+          source: 'mapped_order_instrument',
+          symbol: sym,
+          raw: fromMap
+        });
+        return sym;
+      }
+    }
+
+    const direct = this.getPendingSymbol(clickedEl);
+    if (direct) {
+      const refined = this._refineSymbolForHedging(direct);
+      tgHedgingLog('resolve_symbol', { source: 'getPendingSymbol', symbol: refined, raw: direct });
+      return refined;
+    }
+    if (!clickedEl || !this.detector?.getBestSymbolFromText) {
+      tgHedgingLog('resolve_symbol', {
+        source: 'none',
+        symbol: null,
+        reason: !clickedEl ? 'no_clickedEl' : 'no_getBestSymbolFromText'
+      });
+      return null;
+    }
+    let el = clickedEl;
+    for (let i = 0; i < 10 && el instanceof HTMLElement; i++) {
+      const chunk = (el.innerText || '').replace(/\s+/g, ' ').slice(0, 800);
+      const sym = this.detector.getBestSymbolFromText(chunk);
+      if (sym) {
+        const refined = this._refineSymbolForHedging(sym);
+        tgHedgingLog('resolve_symbol', {
+          source: `ancestor_depth_${i}`,
+          symbol: refined,
+          raw: sym
+        });
+        return refined;
+      }
+      el = el.parentElement;
+    }
+    const fallback = this._refineSymbolForHedging(null);
+    if (fallback) {
+      tgHedgingLog('resolve_symbol', { source: 'refine_only', symbol: fallback });
+      return fallback;
+    }
+    tgHedgingLog('resolve_symbol', { source: 'none', symbol: null, reason: 'walk_exhausted' });
+    return null;
+  }
+
+  _normalizeOrderSide(side) {
+    const s = String(side || '').toUpperCase();
+    if (s === 'LONG' || s === 'BUY') return 'BUY';
+    if (s === 'SHORT' || s === 'SELL') return 'SELL';
+    return null;
   }
 
   /** Get current config from background (for hedging toggle etc.). */
@@ -2476,58 +3788,223 @@ class TradeMonitor {
   }
 
   /**
-   * Hedging rule: when hedging is disabled in config, block opening an
-   * opposite-direction trade on the same symbol while a position is open.
+   * Hedging prevention: block opening opposite side on the same symbol as an open position.
+   * Uses the same symbol normalization as the rest of the detector (strips / . -).
    */
   checkHedging(side, symbol) {
-    const normSymbol = this.detector?.normalizeSymbol
-      ? this.detector.normalizeSymbol(symbol || '')
-      : (symbol || '').toUpperCase();
-    if (!normSymbol || !side) {
+    const desiredSide = this._normalizeOrderSide(side);
+    if (!desiredSide) {
+      tgHedgingLog('check_skip', { why: 'side_not_buy_sell', side });
       return { allowed: true };
     }
-    const desiredSide = String(side).toUpperCase();
-    const opposite = desiredSide === 'BUY' ? 'SELL' : desiredSide === 'SELL' ? 'BUY' : null;
-    if (!opposite) return { allowed: true };
+
+    const norm =
+      this.detector?.normalizeSymbol ||
+      ((s) => String(s || '').replace(/[\/.\-]/g, '').toUpperCase());
+    const normSymbol = symbol ? norm(symbol) : '';
+    if (!normSymbol) {
+      tgHedgingLog('check_skip', {
+        why: 'no_symbol',
+        desiredSide,
+        rawSymbol: symbol || null,
+        hint: 'Cannot compare to open positions without instrument text near click.'
+      });
+      return { allowed: true };
+    }
+
+    const opposite = desiredSide === 'BUY' ? 'SELL' : 'BUY';
     const open = Array.isArray(this.accountState.positions) ? this.accountState.positions : [];
-    const conflict = open.find((p) => {
-      const pSym = this.detector?.normalizeSymbol
-        ? this.detector.normalizeSymbol(p.symbol || '')
-        : (p.symbol || '').toUpperCase();
-      const pSide = String(p.side || '').toUpperCase();
-      return pSym && pSym === normSymbol && pSide === opposite;
+    const positionRows = open.map((p) => ({
+      symbol: p.symbol,
+      symbolNorm: norm(p.symbol),
+      sideRaw: p.side,
+      sideNorm: this._normalizeOrderSide(p.side),
+      oppositeOfClick: this._normalizeOrderSide(p.side) === opposite
+    }));
+    tgHedgingLog('check_positions_snapshot', {
+      clickSide: desiredSide,
+      needOpposite: opposite,
+      normSymbol,
+      positionCount: open.length,
+      positions: positionRows
     });
-    if (!conflict) return { allowed: true };
+
+    const conflict = open.find((p) => {
+      const pSymNorm = norm(p.symbol);
+      const pSide = this._normalizeOrderSide(p.side);
+      if (!pSymNorm || !pSide || pSide !== opposite) return false;
+      return pSymNorm === normSymbol;
+    });
+    if (!conflict) {
+      tgHedgingLog('check_allow', {
+        normSymbol,
+        desiredSide,
+        detail: 'No open position with same norm symbol and opposite side.'
+      });
+      return { allowed: true };
+    }
+    tgHedgingLog('check_block', {
+      normSymbol,
+      desiredSide,
+      conflict: {
+        symbol: conflict.symbol,
+        side: conflict.side,
+        norm: norm(conflict.symbol)
+      }
+    });
     return {
       allowed: false,
-      reason: `Hedging is disabled. You already have a ${conflict.side} on ${symbol || normSymbol}; opening a ${desiredSide} on the same instrument is blocked by your rules.`
+      reason: `Hedging prevention: you already have a ${conflict.side} on ${conflict.symbol || symbol}; opening a ${desiredSide} on the same instrument is blocked by your rules.`
     };
   }
 
   async onTradeClick(domEvent, side) {
+    const t =
+      domEvent.target && domEvent.target instanceof HTMLElement ? domEvent.target : null;
+    tgHedgingLog('click', {
+      side,
+      targetTag: t?.tagName,
+      targetId: t?.id || null,
+      phase: domEvent.eventPhase === 1 ? 'capture' : domEvent.eventPhase === 2 ? 'target' : 'bubble'
+    });
+
     if (domEvent.target && domEvent.target.__tgAllowNextClick === true) {
       domEvent.target.__tgAllowNextClick = false;
+      tgHedgingLog('click_bypass', { side, reason: '__tgAllowNextClick' });
       return;
     }
 
     this.refreshAccountState();
+    const inferredSymbol = this._resolveSymbolForOrderClick(domEvent.target);
+
+    // Pre-trade confirmation: gate every click on a quick "is this balance still
+    // current?" prompt before the rules engine runs. Confirm re-fires the click so
+    // rule evaluation happens on the second pass; cancel simply swallows the click.
+    // A __tgPreTradeConfirmed flag (separate from __tgAllowNextClick) means the click
+    // has already been confirmed, so we skip this gate but still run rules below.
+    const hasOpenPositions = Array.isArray(this.accountState?.positions)
+      && this.accountState.positions.length > 0;
+    const targetEl = domEvent.target instanceof HTMLElement ? domEvent.target : null;
+    if (targetEl && targetEl.__tgPreTradeConfirmed === true) {
+      targetEl.__tgPreTradeConfirmed = false;
+    } else if (targetEl && window.showPreTradeConfirmation && !hasOpenPositions) {
+      // Block the broker default synchronously before any await — awaits yield
+      // to the event loop and Chrome will fire the default click action if we
+      // haven't called preventDefault by then.
+      domEvent.preventDefault();
+      domEvent.stopPropagation();
+      domEvent.stopImmediatePropagation?.();
+      const preConfig = await this.getConfig();
+      await this._loadFundedAccountState().catch(() => {});
+      const isFunded = this._fundedAccountState?.account?.equityMode === 'funded';
+      const hasLossRules =
+        preConfig?.dailyLossRuleEnabled === true ||
+        preConfig?.maxTotalLossEnabled === true;
+      // Skip the prompt entirely when it would have nothing to show:
+      //  - live accounts (no user-declared balance flow)
+      //  - funded accounts still mid-pairing / rules not yet configured
+      // Re-fire via __tgPreTradeConfirmed so the rules engine still runs.
+      if (!isFunded || !hasLossRules) {
+        targetEl.__tgPreTradeConfirmed = true;
+        targetEl.click();
+        return;
+      }
+      const outcome = await this._runPreTradeConfirmation(
+        targetEl,
+        side,
+        inferredSymbol,
+        preConfig
+      );
+      if (outcome === 'confirm') {
+        targetEl.__tgPreTradeConfirmed = true;
+        targetEl.click();
+      }
+      return;
+    }
+
+    const posAfterRefresh = Array.isArray(this.accountState.positions)
+      ? this.accountState.positions.length
+      : 0;
+    tgHedgingLog('after_refreshAccountState', {
+      positionsCount: posAfterRefresh,
+      host: typeof window !== 'undefined' ? window.location.hostname : ''
+    });
 
     // Evaluate this click against user risk / hedging configuration before letting it reach the broker.
     const config = await this.getConfig();
-    if (config && config.hedgingEnabled === true) {
-      const symbol = this.getPendingSymbol(domEvent.target);
+    if (!config) {
+      tgHedgingLog('config', { ok: false, hedgingSkipped: true, reason: 'getConfig_returned_null' });
+    } else {
+      tgHedgingLog('config', {
+        ok: true,
+        hedgingEnabled: config.hedgingEnabled,
+        hedgingWillRun: config.hedgingEnabled !== false
+      });
+    }
+
+    if (config && config.hedgingEnabled !== false) {
+      const symbol = inferredSymbol;
       const hedging = this.checkHedging(side, symbol);
       if (!hedging.allowed) {
+        tgHedgingLog('outcome', { side, symbol, blocked: true, reason: hedging.reason });
         domEvent.preventDefault();
         domEvent.stopPropagation();
+        domEvent.stopImmediatePropagation?.();
         const btnToBlock = side === 'BUY' ? this._buyButtonEl : this._sellButtonEl;
         this._setButtonBlocked(
           btnToBlock,
           hedging.reason ||
-            `Hedging is disabled. You already have an open ${side === 'BUY' ? 'SELL' : 'BUY'} on ${symbol ||
-              'this instrument'}.`
+            `Hedging prevention: you already have an open ${side === 'BUY' ? 'SELL' : 'BUY'} on ${symbol ||
+              'this instrument'}.`,
+          { symbol, side, ruleSlug: 'hedging' }
         );
+        this._journalEmitRuleBlock({
+          side,
+          symbol,
+          reason: hedging.reason,
+          title: 'Hedging blocked',
+          ruleSlug: 'hedging'
+        });
         this.showBlockedReason(hedging.reason, config, { title: 'Hedging blocked' });
+        return;
+      }
+      tgHedgingLog('outcome', {
+        side,
+        symbol,
+        blocked: false,
+        hedgingAllowed: true
+      });
+    } else if (config) {
+      tgHedgingLog('hedging_skipped', {
+        hedgingEnabled: config.hedgingEnabled,
+        reason: 'hedgingEnabled is false — prevention off or dashboard sync turned it off'
+      });
+    }
+
+    if (
+      config &&
+      config.htfMinimumEnabled === true &&
+      Number(config.htfMinimumChartMinutes) > 0 &&
+      typeof this.detector?.detectChartTimeframeMinutes === 'function'
+    ) {
+      const tf = this.detector.detectChartTimeframeMinutes(document);
+      const minM = Number(config.htfMinimumChartMinutes);
+      if (tf != null && tf < minM) {
+        domEvent.preventDefault();
+        domEvent.stopPropagation();
+        domEvent.stopImmediatePropagation?.();
+        this._journalEmitRuleBlock({
+          side,
+          symbol: inferredSymbol,
+          reason: `Chart timeframe ${tf}m below minimum ${minM}m`,
+          title: 'Chart timeframe too low',
+          ruleSlug: 'htf-minimum'
+        });
+        this.showBlockedReason(
+          `Higher timeframe rule: the active chart interval looks like ~${tf} minute(s), but your rule requires at least ${minM} minutes (e.g. switch to 1H or higher). If the wrong interval was detected, adjust the rule or trade on a platform where the timeframe control is visible.`,
+          config,
+          { title: 'Chart timeframe too low' }
+        );
         return;
       }
     }
@@ -2575,6 +4052,19 @@ class TradeMonitor {
         const targetEl = domEvent.target;
         domEvent.preventDefault();
         domEvent.stopPropagation();
+        const limitRuleSlug =
+          wouldExceedDaily && wouldExceedPerTrade
+            ? 'daily-loss,risk-per-trade'
+            : wouldExceedDaily
+              ? 'daily-loss'
+              : 'risk-per-trade';
+        this._journalEmitRuleBlock({
+          side,
+          symbol: pendingSymbol || inferredSymbol,
+          reason,
+          title: 'Limit would be exceeded',
+          ruleSlug: limitRuleSlug
+        });
         this.showBlockedReason(reason, config, {
           title: 'Limit would be exceeded',
           confirmMode: true,
@@ -2603,6 +4093,13 @@ class TradeMonitor {
         if (sl == null || sl === 0) {
           domEvent.preventDefault();
           domEvent.stopPropagation();
+          this._journalEmitRuleBlock({
+            side,
+            symbol: pendingSymbol || trade?.symbol || inferredSymbol,
+            reason: 'Risk per trade enabled without stop loss.',
+            title: 'Stop loss required',
+            ruleSlug: 'risk-per-trade'
+          });
           this.showBlockedReason(
             'Risk per trade is enabled but no stop loss is set. Set a stop loss so risk can be checked, or turn off risk per trade in settings.',
             config
@@ -2622,6 +4119,13 @@ class TradeMonitor {
           const hint = isSlTooFar
             ? ' Your stop loss is very far from entry. Move SL closer or increase max risk % in settings.'
             : ` Use at most ${(maxVol ?? 0).toFixed(2)} lots for this SL, or move SL closer.`;
+          this._journalEmitRuleBlock({
+            side,
+            symbol: pendingSymbol || trade?.symbol || inferredSymbol,
+            reason: `${reasonTitle}: risk ${risk.toFixed(2)} > allowed ${maxRisk.toFixed(2)}`,
+            title: reasonTitle,
+            ruleSlug: 'risk-per-trade'
+          });
           this.showBlockedReason(
             `${reasonTitle}: trade risk $${risk.toFixed(2)} exceeds allowed $${maxRisk.toFixed(2)} (${riskPercent}% of balance).${hint}`,
             config,
@@ -2634,8 +4138,15 @@ class TradeMonitor {
           if (maxVolume != null && volume > maxVolume) {
             domEvent.preventDefault();
             domEvent.stopPropagation();
+            this._journalEmitRuleBlock({
+              side,
+              symbol: pendingSymbol || trade?.symbol || inferredSymbol,
+              reason: `Lot size ${Number(volume).toFixed(2)} > allowed ${maxVolume.toFixed(2)}`,
+              title: 'Lot size too large',
+              ruleSlug: 'risk-per-trade'
+            });
             this.showBlockedReason(
-              `Lot size too large. Allowed max: ${maxVolume.toFixed(2)} lots (${riskPercent}% risk). Move SL closer or reduce lot size.`,
+              `Lot size ${Number(volume).toFixed(2)} exceeds max ${maxVolume.toFixed(2)} lots for your ${riskPercent}% risk rule. Reduce size or tighten SL.`,
               config
             );
             return;
@@ -2646,9 +4157,15 @@ class TradeMonitor {
 
     const decision = await this.evaluateAndReact('ACTIVE');
 
+    // When unpaired, the extension is dormant — rule decisions must not
+    // produce user-facing effects (no "allowed" toast, no BLOCK overlay, no
+    // auto-close). The TG_EVALUATE_ACCOUNT call still ran so the popup gets
+    // fresh activeTrades, but we drop the decision here.
+    if (!this._isPaired) return;
+
     if (!decision || decision.decision === 'ALLOW') {
       if (typeof showToast === 'function') {
-        showToast('Within daily loss limits. Trade allowed by policy – execution not guaranteed.', 'info');
+        showToast('All rules passed. Trade allowed.', 'info');
       }
       return;
     }
@@ -2659,6 +4176,14 @@ class TradeMonitor {
       const reason =
         decision.reason ||
         'Your estimated floating loss has reached the configured daily loss limit. Close or reduce positions before opening new trades.';
+      const ruleSlug = decision.ruleSlug || 'daily-loss';
+      this._journalEmitRuleBlock({
+        side,
+        symbol: inferredSymbol,
+        reason,
+        title: 'Trade blocked',
+        ruleSlug
+      });
       this.showBlockedReason(reason, decision.config);
       return;
     }
@@ -2667,68 +4192,617 @@ class TradeMonitor {
       const reason =
         decision.reason ||
         'Floating loss is close to your daily loss limit. Trade GuardX recommends you stop trading.';
+      const ruleSlug = decision.ruleSlug || 'daily-loss';
+      this._journalEmitRuleBlock({
+        side,
+        symbol: inferredSymbol,
+        reason,
+        title: decision.decision === 'CLOSE_TRADES' ? 'Risk: close trades' : 'Risk warning',
+        ruleSlug
+      });
       this.showBlockedReason(reason, decision.config);
       return;
     }
   }
 
-  updateSlTpReminder(activeTrades) {
-    if (this._isMappingActive()) {
-      if (this.slTpReminderId) {
-        clearInterval(this.slTpReminderId);
-        this.slTpReminderId = null;
+  _journalPositionKey(pos) {
+    if (!pos || typeof pos !== 'object') return 'na';
+    const symbol = (pos.symbol || '').toUpperCase();
+    const side = (pos.side || '').toUpperCase();
+    const entry = this._journalNormalizeNumber(pos.entryPrice);
+    // Keep key stable for same position across volume/partial-close changes.
+    return [symbol, side, entry].join('|');
+  }
+
+  _journalNormalizeNumber(v) {
+    if (v == null || v === '') return null;
+    const n = Number(v);
+    if (!Number.isFinite(n)) return null;
+    return Number(n.toFixed(8));
+  }
+
+  _journalTradeUidForPosition(pos, openedAtMs) {
+    const sym = String(pos?.symbol || 'unknown').toUpperCase();
+    const side = String(pos?.side || 'NA').toUpperCase();
+    const entry = this._journalNormalizeNumber(pos?.entryPrice);
+    const openTs = Number(openedAtMs) || Date.now();
+    const base = `${sym}|${side}|${entry ?? 'na'}|${openTs}`;
+    return `tgx_j_${base}`.slice(0, 180);
+  }
+
+  _stableClientTradeIdForPosition(pos, openedAtMs) {
+    const key = this._positionKey(pos);
+    const openTs = Number(openedAtMs) || 0;
+    return `tgx_${key}_${openTs}`
+      .replace(/[^a-zA-Z0-9:_-]/g, '')
+      .slice(0, 190);
+  }
+
+  _journalLifecycleMatchKey(pos) {
+    if (!pos || typeof pos !== 'object') return '';
+    const symbol = String(pos.symbol || '').toUpperCase();
+    const side = String(pos.side || '').toUpperCase();
+    const entry = this._journalNormalizeNumber(pos.entryPrice);
+    if (!symbol || !side || entry == null) return '';
+    return `${symbol}|${side}|${Number(entry).toFixed(3)}`;
+  }
+
+  _findJournalStateForPosition(pos) {
+    const direct = this._journalPositionState.get(this._journalPositionKey(pos));
+    if (direct) return direct;
+    const target = this._journalLifecycleMatchKey(pos);
+    if (!target) return null;
+    for (const state of this._journalPositionState.values()) {
+      const candidate = this._journalLifecycleMatchKey({
+        symbol: state.symbol,
+        side: state.side,
+        entryPrice: state?.last?.entryPrice
+      });
+      if (candidate && candidate === target) return state;
+    }
+    return null;
+  }
+
+  _findJournalStateForSymbolSide(symbol, side) {
+    const sym = String(symbol || '').toUpperCase();
+    const sd = String(side || '').toUpperCase();
+    if (!sym) return null;
+    let best = null;
+    for (const state of this._journalPositionState.values()) {
+      const stateSym = String(state?.symbol || '').toUpperCase();
+      const stateSide = String(state?.side || '').toUpperCase();
+      if (!stateSym || stateSym !== sym) continue;
+      if (sd && stateSide && stateSide !== sd) continue;
+      if (!best || Number(state?.openedAtMs || 0) > Number(best?.openedAtMs || 0)) {
+        best = state;
       }
+    }
+    return best;
+  }
+
+  _journalBuildEvent(state, eventType, extra = {}) {
+    state.seq = (Number(state.seq) || 0) + 1;
+    const eventAt = extra.eventAt || new Date().toISOString();
+    return {
+      eventType,
+      eventAt,
+      sequence: state.seq,
+      idempotencyKey: `${state.tradeUid}:${state.seq}`,
+      quantity: extra.quantity ?? null,
+      entryPrice: extra.entryPrice ?? null,
+      currentPrice: extra.currentPrice ?? null,
+      exitPrice: extra.exitPrice ?? null,
+      pnl: extra.pnl ?? null,
+      slBefore: extra.slBefore ?? null,
+      slAfter: extra.slAfter ?? null,
+      tpBefore: extra.tpBefore ?? null,
+      tpAfter: extra.tpAfter ?? null,
+      payload: extra.payload && typeof extra.payload === 'object' ? extra.payload : {}
+    };
+  }
+
+  _journalQueueEvents(state, events, immediate = false) {
+    if (!state || !Array.isArray(events) || events.length === 0) return;
+    state.pending = Array.isArray(state.pending) ? state.pending : [];
+    state.pending.push(...events);
+    if (immediate) {
+      if (state.timerId) {
+        clearTimeout(state.timerId);
+        state.timerId = null;
+      }
+      this._journalFlushState(state, true);
       return;
     }
-    const hasOpenTrade = Array.isArray(activeTrades) && activeTrades.length > 0;
-    if (!hasOpenTrade && this.slTpReminderId) {
+    if (state.timerId) return;
+    state.timerId = setTimeout(() => {
+      state.timerId = null;
+      this._journalFlushState(state, false);
+    }, this._journalDebounceMs);
+  }
+
+  _journalFlushState(state, force = false) {
+    if (!state || !Array.isArray(state.pending) || state.pending.length === 0) return;
+    if (!chrome?.runtime?.id || !chrome.runtime.sendMessage) return;
+    const payload = {
+      tradeUid: state.tradeUid,
+      clientTradeId: state.clientTradeId || null,
+      symbol: state.symbol || null,
+      side: state.side || null,
+      currency: 'USD',
+      source: 'extension',
+      captureQuality: 'full',
+      metadata: {
+        host: window.location.hostname
+      },
+      events: state.pending.splice(0)
+    };
+    try {
+      chrome.runtime.sendMessage({
+        type: 'TG_SYNC_JOURNAL_EVENTS',
+        payload: {
+          ...payload,
+          force: !!force
+        }
+      });
+    } catch (_err) {
+      // ignore — background queue handles retries when available
+    }
+  }
+
+  _journalEmitRuleBlock({
+    side = null,
+    symbol = null,
+    reason = null,
+    title = null,
+    tradeUid = null,
+    clientTradeId = null,
+    ruleSlug = null
+  } = {}) {
+    if (!chrome?.runtime?.id || !chrome.runtime.sendMessage) return;
+    const now = Date.now();
+    const linkedState =
+      this._findJournalStateForSymbolSide(symbol, side) ||
+      this._findJournalStateForSymbolSide(symbol, null);
+    const resolvedTradeUid =
+      tradeUid ||
+      linkedState?.tradeUid ||
+      `tgx_rule_block_${String(symbol || 'NA').toUpperCase()}_${String(side || 'NA').toUpperCase()}_${now}`;
+    const resolvedClientTradeId =
+      clientTradeId ||
+      linkedState?.clientTradeId ||
+      null;
+    const payload = {
+      tradeUid: resolvedTradeUid,
+      clientTradeId: resolvedClientTradeId,
+      symbol: symbol || null,
+      side: side || null,
+      currency: 'USD',
+      source: 'extension',
+      captureQuality: 'partial',
+      metadata: {
+        host: window.location.hostname,
+        reason: reason || null,
+        title: title || null,
+        ruleSlug: ruleSlug || null
+      },
+      events: [
+        {
+          eventType: 'RULE_BLOCK',
+          eventAt: new Date(now).toISOString(),
+          sequence: 1,
+          idempotencyKey: `${resolvedTradeUid}:RULE_BLOCK:${ruleSlug || 'rule'}:${now}`,
+          payload: {
+            side: side || null,
+            reason: reason || null,
+            title: title || null,
+            ruleSlug: ruleSlug || null
+          }
+        }
+      ]
+    };
+    try {
+      chrome.runtime.sendMessage({ type: 'TG_SYNC_JOURNAL_EVENTS', payload });
+    } catch (_err) {
+      // ignore
+    }
+  }
+
+  _journalCaptureSnapshot(eventType, state) {
+    if (!state?.tradeUid) return;
+    if (!chrome?.runtime?.id || !chrome.runtime.sendMessage) return;
+    const key = `${state.tradeUid}:${String(eventType || '').toUpperCase()}`;
+    const now = Date.now();
+    const last = this._journalLastSnapshotAt.get(key) || 0;
+    if (now - last < 15000) return; // 15s cooldown per trade/event type
+    this._journalLastSnapshotAt.set(key, now);
+    try {
+      chrome.runtime.sendMessage({
+        type: 'TG_CAPTURE_AND_SYNC_JOURNAL_MEDIA',
+        payload: {
+          tradeUid: state.tradeUid,
+          eventType,
+          capturedAt: new Date().toISOString()
+        }
+      });
+    } catch (_err) {
+      // ignore
+    }
+  }
+
+  _captureJournalPositionEvents(previousPositions, nextPositions, suppressPositionTransitions = false) {
+    if (suppressPositionTransitions) return;
+    const prev = Array.isArray(previousPositions) ? previousPositions : [];
+    const next = Array.isArray(nextPositions) ? nextPositions : [];
+    const nowIso = new Date().toISOString();
+
+    for (const p of next) {
+      const key = this._journalPositionKey(p);
+      let state = this._journalPositionState.get(key);
+      if (!state) {
+        const openedAtMs = this._positionFirstSeenMs.get(this._positionKey(p)) || Date.now();
+        state = {
+          key,
+          tradeUid: this._journalTradeUidForPosition(p, openedAtMs),
+          clientTradeId: this._stableClientTradeIdForPosition(p, openedAtMs),
+          openedAtMs,
+          seq: 0,
+          pending: [],
+          timerId: null,
+          symbol: p.symbol || null,
+          side: p.side || null,
+          last: {
+            quantity: this._journalNormalizeNumber(p.volume),
+            entryPrice: this._journalNormalizeNumber(p.entryPrice),
+            currentPrice: this._journalNormalizeNumber(p.currentPrice),
+            pnl: this._journalNormalizeNumber(p.profit),
+            stopLoss: this._journalNormalizeNumber(p.stopLoss),
+            takeProfit: this._journalNormalizeNumber(p.takeProfit)
+          }
+        };
+        this._journalPositionState.set(key, state);
+        this._journalQueueEvents(state, [
+          this._journalBuildEvent(state, 'OPEN', {
+            eventAt: new Date(openedAtMs).toISOString(),
+            quantity: state.last.quantity,
+            entryPrice: state.last.entryPrice,
+            currentPrice: state.last.currentPrice,
+            pnl: state.last.pnl,
+            slAfter: state.last.stopLoss,
+            tpAfter: state.last.takeProfit
+          })
+        ]);
+        this._journalCaptureSnapshot('OPEN', state);
+        continue;
+      }
+
+      state.symbol = p.symbol || state.symbol;
+      state.side = p.side || state.side;
+      const cur = {
+        quantity: this._journalNormalizeNumber(p.volume),
+        entryPrice: this._journalNormalizeNumber(p.entryPrice),
+        currentPrice: this._journalNormalizeNumber(p.currentPrice),
+        pnl: this._journalNormalizeNumber(p.profit),
+        stopLoss: this._journalNormalizeNumber(p.stopLoss),
+        takeProfit: this._journalNormalizeNumber(p.takeProfit)
+      };
+      const events = [];
+      if (cur.stopLoss !== state.last.stopLoss) {
+        events.push(this._journalBuildEvent(state, 'SL_UPDATE', {
+          eventAt: nowIso,
+          slBefore: state.last.stopLoss,
+          slAfter: cur.stopLoss,
+          quantity: cur.quantity,
+          entryPrice: cur.entryPrice,
+          currentPrice: cur.currentPrice,
+          pnl: cur.pnl
+        }));
+      }
+      if (cur.takeProfit !== state.last.takeProfit) {
+        events.push(this._journalBuildEvent(state, 'TP_UPDATE', {
+          eventAt: nowIso,
+          tpBefore: state.last.takeProfit,
+          tpAfter: cur.takeProfit,
+          quantity: cur.quantity,
+          entryPrice: cur.entryPrice,
+          currentPrice: cur.currentPrice,
+          pnl: cur.pnl
+        }));
+      }
+      if (cur.quantity !== state.last.quantity) {
+        events.push(this._journalBuildEvent(state, 'SIZE_UPDATE', {
+          eventAt: nowIso,
+          quantity: cur.quantity,
+          entryPrice: cur.entryPrice,
+          currentPrice: cur.currentPrice,
+          pnl: cur.pnl
+        }));
+      }
+      if (events.length > 0) this._journalQueueEvents(state, events);
+      state.last = cur;
+    }
+
+    const closed = this._findClosedPositions(prev, next);
+    for (const p of closed) {
+      const key = this._journalPositionKey(p);
+      const state = this._journalPositionState.get(key);
+      if (!state) continue;
+      const closeEvent = this._journalBuildEvent(state, 'CLOSE', {
+        eventAt: nowIso,
+        quantity: this._journalNormalizeNumber(p.volume),
+        entryPrice: this._journalNormalizeNumber(p.entryPrice),
+        exitPrice: this._journalNormalizeNumber(p.currentPrice),
+        currentPrice: this._journalNormalizeNumber(p.currentPrice),
+        pnl: this._journalNormalizeNumber(p.profit),
+        slAfter: this._journalNormalizeNumber(p.stopLoss),
+        tpAfter: this._journalNormalizeNumber(p.takeProfit)
+      });
+      this._journalCaptureSnapshot('CLOSE', state);
+      this._journalQueueEvents(state, [closeEvent], true);
+      if (state.timerId) {
+        clearTimeout(state.timerId);
+      }
+      this._journalPositionState.delete(key);
+    }
+  }
+
+  _syncPositionOpenTimes(trades) {
+    const list = Array.isArray(trades) ? trades : [];
+    const seen = new Set();
+    const now = Date.now();
+    for (const t of list) {
+      const key = this._positionKey(t);
+      seen.add(key);
+      if (!this._positionFirstSeenMs.has(key)) {
+        this._positionFirstSeenMs.set(key, now);
+      }
+    }
+    for (const key of [...this._positionFirstSeenMs.keys()]) {
+      if (!seen.has(key)) this._positionFirstSeenMs.delete(key);
+    }
+  }
+
+  _getEffectiveMinimumHoldMinutes(config) {
+    if (!config || config.minimumHoldEnabled !== true) return null;
+    const fallback = Math.max(0, Number(config.minimumHoldMinutes) || 0);
+    const host = (window.location.hostname || '').toLowerCase();
+    const raw = config.minimumHoldPlatformOverrides;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      for (const [k, v] of Object.entries(raw)) {
+        if (String(k).toLowerCase() !== host) continue;
+        const n = Number(v);
+        if (Number.isFinite(n) && n >= 0) return n;
+      }
+    }
+    return fallback;
+  }
+
+  _attachMinimumHoldGuard() {
+    if (this._minimumHoldGuardAttached) return;
+    this._minimumHoldGuardAttached = true;
+    document.addEventListener('click', (e) => this._onPossibleCloseClick(e), true);
+  }
+
+  /**
+   * Intercepts position close clicks:
+   * - HTF: config `htfMinimumChartMinutes` = minimum minutes the position must stay open before close (no override).
+   * - Minimum hold: separate rule with optional override.
+   */
+  _onPossibleCloseClick(domEvent) {
+    if (this._isMappingActive()) return;
+    const target = domEvent.target;
+    if (!(target instanceof HTMLElement)) return;
+
+    const config = this._cachedRiskConfig;
+    if (!config) return;
+
+    const htfCloseOn =
+      config.htfMinimumEnabled === true && Number(config.htfMinimumChartMinutes) > 0;
+    const htfNeedMin = htfCloseOn ? Math.max(1, Number(config.htfMinimumChartMinutes)) : 0;
+
+    const minHoldOn = config.minimumHoldEnabled === true;
+    const minMin = minHoldOn ? this._getEffectiveMinimumHoldMinutes(config) : null;
+    const minHoldActive = minHoldOn && minMin != null && minMin > 0;
+
+    if (!htfCloseOn && !minHoldActive) return;
+
+    const trades = this._stabilizeTrades(this.getLiveTrades()) || [];
+    for (const t of trades) {
+      if (!t.element || !t.closeSelector) continue;
+      let closeBtn = null;
+      try {
+        closeBtn = t.element.querySelector(t.closeSelector);
+      } catch (_err) {
+        continue;
+      }
+      if (!closeBtn || !(closeBtn instanceof HTMLElement)) continue;
+      if (target !== closeBtn && !closeBtn.contains(target)) continue;
+
+      const skipMinimumHoldOnce = closeBtn.__tgAllowNextClose === true;
+      if (skipMinimumHoldOnce) {
+        closeBtn.__tgAllowNextClose = false;
+      }
+
+      const key = this._positionKey(t);
+      const first = this._positionFirstSeenMs.get(key);
+
+      if (htfCloseOn) {
+        const needMs = htfNeedMin * 60 * 1000;
+        const elapsed = first != null ? Date.now() - first : needMs;
+        if (elapsed < needMs) {
+          const remainSec = Math.ceil((needMs - elapsed) / 1000);
+          domEvent.preventDefault();
+          domEvent.stopPropagation();
+          if (typeof domEvent.stopImmediatePropagation === 'function') domEvent.stopImmediatePropagation();
+          const sym = t.symbol || 'this position';
+          const msg = `Higher timeframe rule: ${sym} must stay open at least ${htfNeedMin} minute(s) from your config. Wait ~${remainSec}s before closing — the trade will not close until then.`;
+          this._journalEmitRuleBlock({
+            side: t.side || null,
+            symbol: t.symbol || null,
+            reason: msg,
+            title: 'HTF: close not allowed yet',
+            ruleSlug: 'htf-minimum'
+          });
+          this.showBlockedReason(msg, config, { title: 'HTF: close not allowed yet' });
+          return;
+        }
+      }
+
+      if (skipMinimumHoldOnce || !minHoldActive) return;
+
+      const needMs = minMin * 60 * 1000;
+      const elapsed = first != null ? Date.now() - first : needMs;
+      if (elapsed >= needMs) return;
+
+      const remainSec = Math.ceil((needMs - elapsed) / 1000);
+      domEvent.preventDefault();
+      domEvent.stopPropagation();
+      if (typeof domEvent.stopImmediatePropagation === 'function') domEvent.stopImmediatePropagation();
+
+      const sym = t.symbol || 'this position';
+      const msg = `Minimum hold (${minMin} min): wait ~${remainSec}s before closing ${sym}.`;
+      this._journalEmitRuleBlock({
+        side: t.side || null,
+        symbol: t.symbol || null,
+        reason: msg,
+        title: 'Close blocked',
+        ruleSlug: 'minimum-hold'
+      });
+      this.showBlockedReason(msg, config, {
+        title: 'Close blocked',
+        confirmMode: true,
+        onContinue: () => {
+          closeBtn.__tgAllowNextClose = true;
+          closeBtn.click();
+        }
+      });
+      return;
+    }
+  }
+
+  _clearSlTpReminder() {
+    if (this.slTpReminderId) {
       clearInterval(this.slTpReminderId);
       this.slTpReminderId = null;
-      return;
     }
-    if (!hasOpenTrade) return;
-    if (this.slTpReminderId) return;
-    this.slTpReminderId = setInterval(() => {
+    if (this._slTpFirstTimeoutId) {
+      clearTimeout(this._slTpFirstTimeoutId);
+      this._slTpFirstTimeoutId = null;
+    }
+    this._slTpScheduleKey = null;
+  }
+
+  updateSlTpReminder(activeTrades) {
+    if (this._isMappingActive()) return;
+
+    this.getConfig().then((config) => {
+      if (!config || config.stopLossAlertEnabled !== true) {
+        this._clearSlTpReminder();
+        return;
+      }
+
+      const hasOpenTrade = Array.isArray(activeTrades) && activeTrades.length > 0;
+      if (!hasOpenTrade) {
+        this._clearSlTpReminder();
+        return;
+      }
+
       const trades = this._stabilizeTrades(this.getLiveTrades()) || [];
       if (trades.length === 0) {
-        clearInterval(this.slTpReminderId);
-        this.slTpReminderId = null;
+        this._clearSlTpReminder();
         return;
       }
+
       const needsSlReminder = trades.some((t) => {
         const sl = t.stopLoss;
-        const slSet = sl != null && Number(sl) > 0;
-        return !slSet;
-      });
-      if (!needsSlReminder) return;
-      const primaryNoSlTrade = trades.find((t) => {
-        const sl = t?.stopLoss;
         return !(sl != null && Number(sl) > 0);
-      }) || trades[0];
-      const lines = trades.map((t) => {
-        const sl = t.stopLoss != null && Number(t.stopLoss) > 0 ? String(t.stopLoss) : '0';
-        const tp = t.takeProfit != null && Number(t.takeProfit) > 0 ? String(t.takeProfit) : '0';
-        return `${t.symbol || '?'} — SL: ${sl}, TP: ${tp}`;
       });
-      const detail = lines.join(' · ');
-      if (typeof showNoStopLossOverlay === 'function') {
-        showNoStopLossOverlay({
-          symbol: primaryNoSlTrade?.symbol || '?',
-          stopLoss: primaryNoSlTrade?.stopLoss,
-          takeProfit: primaryNoSlTrade?.takeProfit,
-          message: `Current: ${detail}`,
-          onSetStopLoss: () => this._focusStopLossControl(primaryNoSlTrade)
-        });
+      if (!needsSlReminder) {
+        this._clearSlTpReminder();
         return;
       }
-      if (typeof showWarningOverlay === 'function') {
-        showWarningOverlay({
-          title: 'Set stop loss (reminder)',
-          message: `Current: ${detail}. Where SL is 0, please set a stop loss. This reminder repeats every 30s. Advisory only.`,
-          highlight: false
-        });
+
+      // Seconds from dashboard rule (`alertDelaySeconds` → storage `stopLossAlertDelaySeconds` via rules sync)
+      const delaySecRaw = Number(config.stopLossAlertDelaySeconds);
+      const delaySec = Number.isFinite(delaySecRaw) && delaySecRaw > 0 ? delaySecRaw : 30;
+      const delayMs = Math.max(5000, delaySec * 1000);
+      const delayLabel = Math.round(delayMs / 1000);
+
+      const noSlKey = trades
+        .filter((t) => !(t.stopLoss != null && Number(t.stopLoss) > 0))
+        .map((t) => `${String(t.symbol || '').toUpperCase()}|${String(t.side || '').toUpperCase()}`)
+        .sort()
+        .join(',');
+      const scheduleKey = `${delayMs}|${noSlKey}`;
+
+      if (
+        this._slTpScheduleKey === scheduleKey &&
+        (this.slTpReminderId != null || this._slTpFirstTimeoutId != null)
+      ) {
+        return;
       }
-    }, 30000);
+
+      this._clearSlTpReminder();
+      this._slTpScheduleKey = scheduleKey;
+
+      const runSlTpTick = () => {
+        const cur = this._stabilizeTrades(this.getLiveTrades()) || [];
+        if (cur.length === 0) {
+          this._clearSlTpReminder();
+          return;
+        }
+        const stillNeed = cur.some((t) => {
+          const sl = t.stopLoss;
+          return !(sl != null && Number(sl) > 0);
+        });
+        if (!stillNeed) {
+          this._clearSlTpReminder();
+          return;
+        }
+        const primaryNoSlTrade =
+          cur.find((t) => {
+            const sl = t?.stopLoss;
+            return !(sl != null && Number(sl) > 0);
+          }) || cur[0];
+        const lines = cur.map((t) => {
+          const sl = t.stopLoss != null && Number(t.stopLoss) > 0 ? String(t.stopLoss) : '0';
+          const tp = t.takeProfit != null && Number(t.takeProfit) > 0 ? String(t.takeProfit) : '0';
+          return `${t.symbol || '?'} — SL: ${sl}, TP: ${tp}`;
+        });
+        const detail = lines.join(' · ');
+        this._journalEmitRuleBlock({
+          side: primaryNoSlTrade?.side || null,
+          symbol: primaryNoSlTrade?.symbol || null,
+          reason: `Stop loss reminder (advisory): ${detail}`,
+          title: 'No stop loss detected',
+          ruleSlug: 'stop-loss-alert'
+        });
+        if (typeof showNoStopLossOverlay === 'function') {
+          showNoStopLossOverlay({
+            symbol: primaryNoSlTrade?.symbol || '?',
+            stopLoss: primaryNoSlTrade?.stopLoss,
+            takeProfit: primaryNoSlTrade?.takeProfit,
+            message: `Current: ${detail}`,
+            repeatIntervalSeconds: delayLabel,
+            onSetStopLoss: () => this._focusStopLossControl(primaryNoSlTrade)
+          });
+          return;
+        }
+        if (typeof showWarningOverlay === 'function') {
+          showWarningOverlay({
+            title: 'Set stop loss (reminder)',
+            message: `Current: ${detail}. Where SL is 0, please set a stop loss. Repeats every ${delayLabel}s while the dashboard rule is on. Advisory only.`,
+            highlight: false
+          });
+        }
+      };
+
+      // First prompt after rule delay, then repeat at same interval (not on every DOM refresh)
+      this._slTpFirstTimeoutId = setTimeout(() => {
+        this._slTpFirstTimeoutId = null;
+        runSlTpTick();
+        this.slTpReminderId = setInterval(runSlTpTick, delayMs);
+      }, delayMs);
+    });
   }
 
   _focusStopLossControl(trade) {
@@ -2761,7 +4835,11 @@ class TradeMonitor {
 
   async evaluateAndReact(mode) {
     // Ask background risk engine for a decision (ALLOW / WARN / BLOCK / CLOSE_TRADES)
-    // based on current accountState and active positions.
+    // based on current accountState and active positions. We always fire this —
+    // even when unpaired — because TG_EVALUATE_ACCOUNT is the only path that
+    // persists `activeTrades` to chrome.storage for the popup to render. The
+    // user-facing side effects (toasts, overlays, auto-close) are gated on
+    // _isPaired at their individual call sites instead.
     return new Promise((resolve) => {
       if (!chrome?.runtime?.id || !chrome.runtime.sendMessage) {
         resolve(null);
@@ -2786,10 +4864,14 @@ class TradeMonitor {
               return;
             }
             const { decision: status, metrics } = decision;
-            if (!this._isMappingActive() && mode === 'PASSIVE') {
+            // PASSIVE side-effects (WARN toast, auto-close) only fire for
+            // paired users — unpaired clients still send TG_EVALUATE_ACCOUNT
+            // to refresh the popup's activeTrades, but rule outcomes must
+            // stay invisible.
+            if (this._isPaired && !this._isMappingActive() && mode === 'PASSIVE') {
               if (status === 'WARN' && typeof showToast === 'function') {
                 showToast(
-                  `Daily loss warning: floating loss ${formatCurrency(metrics?.floatingLoss)} vs limit ${formatCurrency(metrics?.dailyLossLimitAmount)}`,
+                  `Daily loss at ${((Number(metrics?.floatingLoss) / Number(metrics?.dailyLossLimitAmount)) * 100).toFixed(0)}% of limit. $${formatCurrency(Number(metrics?.dailyLossLimitAmount) - Number(metrics?.floatingLoss))} remaining before hard stop.`,
                   'warn'
                 );
               }
@@ -2860,9 +4942,17 @@ class TradeMonitor {
       }
     });
     if (!didClick && typeof showWarningOverlay === 'function') {
+      this._journalEmitRuleBlock({
+        side: null,
+
+        symbol: null,
+        reason: `Auto-close warning: could not find close button. Floating loss ${formatCurrency(metrics?.floatingLoss)} vs limit ${formatCurrency(metrics?.dailyLossLimitAmount)}.`,
+        title: 'Risk: close manually',
+        ruleSlug: 'daily-loss'
+      });
       showWarningOverlay({
-        title: 'CLOSE YOUR TRADE NOW – RISK LIMIT NEAR',
-        message: `Trade GuardX could not locate a close button. Floating loss: ${formatCurrency(metrics?.floatingLoss)}, limit: ${formatCurrency(metrics?.dailyLossLimitAmount)}. Please close positions manually if appropriate.`,
+        title: 'Daily loss limit reached — close all positions',
+        message: `Floating loss: $${formatCurrency(metrics?.floatingLoss)} has hit your $${formatCurrency(metrics?.dailyLossLimitAmount)} daily limit. Close all positions now. Further trading will deepen losses.`,
         highlight: true
       });
       if (typeof flashScreen === 'function') flashScreen();

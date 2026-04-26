@@ -14,7 +14,8 @@ export function evaluateStackingRule(positions = [], config) {
   if (count >= max) {
     return {
       decision: 'BLOCK',
-      reason: `Maximum open positions (${max}) reached. Close some trades before opening new ones.`
+      reason: `Position limit hit. You have ${count}/${max} open positions. Close one before opening another.`,
+      ruleSlug: 'stacking'
     };
   }
   return null;
@@ -31,21 +32,26 @@ export function evaluateMaxTradesPerDayRule(tradesOpenedToday = 0, config) {
   if (count >= max) {
     return {
       decision: 'BLOCK',
-      reason: `Maximum trades per day (${max}) reached. Trading blocked for today.`
+      reason: `Trade limit hit. You've opened ${count}/${max} trades today. This one is blocked. Step away.`,
+      ruleSlug: 'max-trades-day'
     };
   }
   return null;
 }
 
 /**
- * Block if total loss (from starting equity) >= max total loss (amount or %).
+ * Block if total loss (from challenge starting balance) >= max total loss (amount or %).
+ *
+ * Baseline priority: config.accountSize (challenge size, server-enriched for funded accounts)
+ * → accountState.startingEquity (daily start, or DOM-captured start for live). This ensures
+ * funded accounts are measured against the immutable challenge balance, not the daily reset.
  */
 export function evaluateMaxTotalLossRule(accountState, config) {
   if (!config || config.maxTotalLossEnabled !== true) return null;
-  const startingEquity = Number(accountState?.startingEquity || 0);
+  const baseline = Number(config.accountSize) || Number(accountState?.startingEquity) || 0;
   const equity = Number(accountState?.equity ?? accountState?.balance ?? 0);
-  if (!startingEquity || !equity) return null;
-  const totalLoss = startingEquity - equity;
+  if (!baseline || !equity) return null;
+  const totalLoss = baseline - equity;
   if (totalLoss <= 0) return null;
 
   const type = config.maxTotalLossType === 'amount' ? 'amount' : 'percent';
@@ -54,17 +60,19 @@ export function evaluateMaxTotalLossRule(accountState, config) {
     if (limit > 0 && totalLoss >= limit) {
       return {
         decision: 'BLOCK',
-        reason: `Max total loss (${limit}) reached. No new trades until equity recovers.`
+        reason: `Max drawdown breached. Loss: $${totalLoss.toFixed(2)} exceeds your $${limit.toFixed(2)} limit. Stop trading immediately.`,
+        ruleSlug: 'max-total-loss'
       };
     }
   } else {
     const limitPct = Number(config.maxTotalLossPct) || 0;
     if (limitPct > 0) {
-      const pct = (totalLoss / startingEquity) * 100;
+      const pct = (totalLoss / baseline) * 100;
       if (pct >= limitPct) {
         return {
           decision: 'BLOCK',
-          reason: `Max total loss (${limitPct}%) reached. No new trades until equity recovers.`
+          reason: `Max drawdown breached. Down ${pct.toFixed(1)}% from challenge balance (limit: ${limitPct}%). Stop trading immediately.`,
+          ruleSlug: 'max-total-loss'
         };
       }
     }
@@ -83,7 +91,8 @@ export function evaluateCloseDayOnLossCountRule(sessionLossCount = 0, config) {
   if (count >= max) {
     return {
       decision: 'BLOCK',
-      reason: `Day closed after ${count} losing trade(s). No more trades today.`
+      reason: `Loss streak limit. ${count} consecutive losses hit your ${max}-loss safety rail. Next trade is blocked. Step away.`,
+      ruleSlug: 'close-after-losses'
     };
   }
   return null;

@@ -1,20 +1,22 @@
 {
   "manifest_version": 3,
   "name": "TradeGuardX",
-  "description": "Browser-based trading discipline assistant that estimates risk, warns on rule violations, and helps you respect funded-account limits. No guarantees of trade protection.",
-  "version": "1.0.0",
+  "description": "Monitors trading activity and enforces risk rules like daily loss limits and stop-loss to help traders avoid costly mistakes.",
+ "version": "1.0.0",
   "icons": {
-    "16": "icons/logo.png",
-    "48": "icons/logo.png",
-    "128": "icons/logo.png"
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
   },
   "action": {
     "default_popup": "src/popup/popup.html",
     "default_title": "TradeGuardX",
     "default_icon": {
-      "16": "icons/logo.png",
-      "48": "icons/logo.png",
-      "128": "icons/logo.png"
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
     }
   },
   "background": {
@@ -25,25 +27,40 @@
     "storage",
     "scripting",
     "activeTab",
-    "tabs"
+    "tabs",
+    "alarms"
   ],
   "host_permissions": [
-    "<all_urls>",
-    "https://api.anthropic.com/*"
+    "*://*.exness.com/*",
+    "*://*.delta.exchange/*",
+    "*://*.thefundedroom.com/*"
   ],
   "content_scripts": [
     {
       "matches": [
-        "<all_urls>"
+        "*://*.exness.com/*",
+        "*://*.delta.exchange/*",
+        "*://*.thefundedroom.com/*"
       ],
       "js": [
+        "src/vendor/sentry.bundle.min.js",
+        "src/sentry/sentry-config.js",
+        "src/content/hostGate.js",
+        "src/sentry/sentry-init.js",
         "src/overlay/warningOverlay.js",
+        "src/content/equityResolver.js",
         "src/content/universalDetector.js",
         "src/content/deep-mapper.js",
         "src/adapters/baseAdapter.js",
         "src/adapters/universalAdapter.js",
         "src/content/domScanner.js",
         "src/content/orderTableTracker.js",
+        "src/content/positionSource.js",
+        "src/content/positionState.js",
+        "src/content/positionTransitions.js",
+        "src/content/positionCache.js",
+        "src/content/mappingQuality.js",
+        "src/content/mappingStore.js",
         "src/content/tradeMonitor.js",
         "src/content/content.js"
       ],

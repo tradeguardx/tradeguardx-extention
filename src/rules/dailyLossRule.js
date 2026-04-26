@@ -81,7 +81,8 @@ export function evaluateDailyLossRule(accountState, config) {
     return {
       decision: 'BLOCK',
       reason: 'Daily loss limit reached. Further trading blocked.',
-      metrics
+      metrics,
+      ruleSlug: 'daily-loss'
     };
   }
 
@@ -89,7 +90,8 @@ export function evaluateDailyLossRule(accountState, config) {
     return {
       decision: 'CLOSE_TRADES',
       reason: `Floating loss is above warning threshold (${warningThresholdPct}% of daily limit).`,
-      metrics
+      metrics,
+      ruleSlug: 'daily-loss'
     };
   }
 
@@ -97,7 +99,8 @@ export function evaluateDailyLossRule(accountState, config) {
     return {
       decision: 'WARN',
       reason: 'Floating loss is significant relative to your daily limit.',
-      metrics
+      metrics,
+      ruleSlug: 'daily-loss'
     };
   }
 

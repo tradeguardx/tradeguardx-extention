@@ -1,0 +1,2245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>TradeGuardX — Visual Redesign</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&display=swap"
+  rel="stylesheet"
+/>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --bg-page: #07080a;
+    --surface: #13161b;
+    --surface-2: #1a1e25;
+    --surface-hi: #20252d;
+    --border: rgba(255, 255, 255, 0.06);
+    --border-2: rgba(255, 255, 255, 0.1);
+    --border-hi: rgba(255, 255, 255, 0.14);
+    --text: #e8eaee;
+    --text-2: #9098a4;
+    --text-3: #5a6370;
+    --text-4: #3d444d;
+    --green: #4ade80;
+    --green-bg: rgba(74, 222, 128, 0.1);
+    --green-border: rgba(74, 222, 128, 0.22);
+    --amber: #f59e0b;
+    --amber-bg: rgba(245, 158, 11, 0.1);
+    --amber-border: rgba(245, 158, 11, 0.22);
+    --red: #ef4444;
+    --red-bg: rgba(239, 68, 68, 0.1);
+    --red-border: rgba(239, 68, 68, 0.22);
+    --blue: #60a5fa;
+    --blue-bg: rgba(96, 165, 250, 0.1);
+    --shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.6);
+    --font-ui: 'Inter', system-ui, -apple-system, sans-serif;
+    --font-num: 'JetBrains Mono', ui-monospace, monospace;
+    --font-hero: 'Fraunces', Georgia, serif;
+    --r-sm: 4px;
+    --r-md: 8px;
+    --r-lg: 12px;
+    --r-xl: 16px;
+    --r-pill: 999px;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+  }
+  body {
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text);
+    background: var(--bg-page);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 1360px;
+    margin: 0 auto;
+    padding: 72px 40px 120px;
+  }
+
+  /* ── Page header ───────────────────────────────────────────── */
+  .hero {
+    margin-bottom: 72px;
+    max-width: 720px;
+  }
+  .kicker {
+    font-family: var(--font-num);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    margin-bottom: 16px;
+  }
+  .hero-title {
+    font-family: var(--font-hero);
+    font-weight: 500;
+    font-size: 56px;
+    line-height: 1.05;
+    letter-spacing: -0.025em;
+    margin: 0 0 20px;
+  }
+  .hero-title em {
+    font-style: italic;
+    font-weight: 400;
+    color: var(--green);
+  }
+  .hero-sub {
+    font-size: 17px;
+    color: var(--text-2);
+    max-width: 620px;
+    margin: 0;
+    line-height: 1.55;
+  }
+
+  /* ── Sections ──────────────────────────────────────────────── */
+  .section {
+    margin-bottom: 96px;
+  }
+  .section-head {
+    margin-bottom: 32px;
+    max-width: 820px;
+  }
+  .section-num {
+    font-family: var(--font-num);
+    font-size: 11px;
+    color: var(--text-3);
+    letter-spacing: 0.12em;
+    margin-bottom: 8px;
+  }
+  .section-title {
+    font-family: var(--font-hero);
+    font-weight: 500;
+    font-size: 32px;
+    line-height: 1.15;
+    letter-spacing: -0.015em;
+    margin: 0 0 10px;
+  }
+  .section-sub {
+    font-size: 15px;
+    color: var(--text-2);
+    margin: 0;
+    max-width: 620px;
+  }
+
+  /* ── Card grid ─────────────────────────────────────────────── */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, max-content));
+    gap: 28px;
+    justify-content: start;
+  }
+  .grid-wide {
+    grid-template-columns: repeat(auto-fill, minmax(520px, max-content));
+  }
+  .cell {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .cell-label {
+    font-family: var(--font-num);
+    font-size: 11px;
+    color: var(--text-3);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .cell-label b {
+    font-weight: 600;
+    color: var(--text-2);
+    margin-right: 6px;
+  }
+
+  /* ═══════════════════════════════════════════════════════════
+     POPUP FRAME — 380px (real extension popup width)
+     ═══════════════════════════════════════════════════════════ */
+  .popup {
+    width: 380px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-xl);
+    overflow: hidden;
+    box-shadow: var(--shadow-lg);
+    font-family: var(--font-ui);
+  }
+  .popup-body {
+    padding: 24px;
+  }
+  .popup-body-lg {
+    padding: 28px 24px;
+  }
+
+  /* ── Top bar (status pill) ─────────────────────────────────── */
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 28px;
+  }
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px 6px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-pill);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text);
+  }
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    position: relative;
+  }
+  .dot::after {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: 50%;
+    animation: dot-pulse 2.2s ease-in-out infinite;
+  }
+  .dot.green {
+    background: var(--green);
+  }
+  .dot.green::after {
+    background: rgba(74, 222, 128, 0.4);
+  }
+  .dot.amber {
+    background: var(--amber);
+  }
+  .dot.amber::after {
+    background: rgba(245, 158, 11, 0.4);
+  }
+  .dot.red {
+    background: var(--red);
+  }
+  .dot.red::after {
+    background: rgba(239, 68, 68, 0.4);
+  }
+  @keyframes dot-pulse {
+    0%,
+    100% {
+      transform: scale(1);
+      opacity: 0;
+    }
+    50% {
+      transform: scale(1.6);
+      opacity: 0.6;
+    }
+  }
+  .icon-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: var(--r-md);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-2);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .icon-btn:hover {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  .icon-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  /* ── Hero number (the ONE number) ──────────────────────────── */
+  .hero-num {
+    font-family: var(--font-num);
+    font-size: 56px;
+    font-weight: 600;
+    line-height: 0.95;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+    margin: 0 0 6px;
+  }
+  .hero-num.green {
+    color: var(--green);
+  }
+  .hero-num.amber {
+    color: var(--amber);
+  }
+  .hero-num.red {
+    color: var(--red);
+  }
+  .hero-num-sub {
+    font-size: 14px;
+    color: var(--text-2);
+    margin: 0 0 24px;
+  }
+
+  /* ── Progress bar ──────────────────────────────────────────── */
+  .progress {
+    height: 4px;
+    background: var(--surface);
+    border-radius: var(--r-pill);
+    overflow: hidden;
+    margin-bottom: 10px;
+  }
+  .progress-fill {
+    height: 100%;
+    border-radius: var(--r-pill);
+    background: var(--green);
+    transition: width 0.4s ease;
+  }
+  .progress-fill.amber {
+    background: var(--amber);
+  }
+  .progress-fill.red {
+    background: var(--red);
+  }
+  .progress-meta {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--font-num);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-3);
+    letter-spacing: 0.02em;
+    margin-bottom: 24px;
+  }
+
+  /* ── Divider ───────────────────────────────────────────────── */
+  .hr {
+    height: 1px;
+    background: var(--border);
+    margin: 20px 0;
+  }
+
+  /* ── Recap rows ────────────────────────────────────────────── */
+  .recap {
+    display: grid;
+    grid-template-columns: 56px 1fr;
+    gap: 12px;
+    align-items: baseline;
+    padding: 4px 0;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+  }
+  .recap + .recap {
+    padding-top: 10px;
+  }
+  .recap-k {
+    color: var(--text-3);
+    font-size: 12px;
+    letter-spacing: 0.02em;
+  }
+  .recap-v {
+    font-family: var(--font-num);
+    color: var(--text);
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .recap-v .pos {
+    color: var(--green);
+  }
+  .recap-v .neg {
+    color: var(--red);
+  }
+  .recap-v .dim {
+    color: var(--text-3);
+  }
+  .recap-v .sep {
+    color: var(--text-4);
+  }
+
+  /* ── Bottom action row ─────────────────────────────────────── */
+  .actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 24px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+  }
+  .btn {
+    border: 1px solid var(--border-2);
+    background: var(--surface);
+    color: var(--text);
+    border-radius: var(--r-md);
+    padding: 10px 14px;
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+  .btn:hover {
+    background: var(--surface-2);
+    border-color: var(--border-hi);
+  }
+  .btn-full {
+    flex: 1;
+  }
+  .btn-icon {
+    width: 40px;
+    padding: 10px;
+  }
+  .btn-icon svg {
+    width: 16px;
+    height: 16px;
+  }
+  .btn-primary {
+    background: var(--text);
+    border-color: var(--text);
+    color: var(--bg);
+  }
+  .btn-primary:hover {
+    background: #fff;
+    border-color: #fff;
+  }
+  .btn-ghost {
+    background: transparent;
+    border-color: var(--border-2);
+    color: var(--text-2);
+  }
+  .btn-ghost:hover {
+    color: var(--text);
+  }
+  .btn-danger {
+    background: var(--red);
+    border-color: var(--red);
+    color: #fff;
+  }
+
+  /* ── In-trade meta grid ────────────────────────────────────── */
+  .trade-meta {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+  .tm-item {
+    padding: 12px 14px;
+    background: var(--surface);
+    border-radius: var(--r-md);
+    border: 1px solid var(--border);
+  }
+  .tm-label {
+    font-size: 10.5px;
+    font-family: var(--font-num);
+    color: var(--text-3);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+  .tm-value {
+    font-family: var(--font-num);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+  .tm-value .small {
+    color: var(--text-3);
+    font-size: 11px;
+  }
+  .tm-value .neg {
+    color: var(--red);
+  }
+  .tm-value .pos {
+    color: var(--green);
+  }
+
+  .inline-kv {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--font-num);
+    font-size: 12px;
+    color: var(--text-2);
+    font-variant-numeric: tabular-nums;
+    margin-top: 12px;
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     PAIRING / ONBOARDING specifics
+     ══════════════════════════════════════════════════════════ */
+  .logo {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, rgba(74, 222, 128, 0.2), rgba(74, 222, 128, 0.05));
+    border: 1px solid rgba(74, 222, 128, 0.3);
+    color: var(--green);
+    font-family: var(--font-hero);
+    font-weight: 600;
+    font-size: 18px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .brand-name {
+    font-family: var(--font-ui);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .brand-name em {
+    color: var(--green);
+    font-style: normal;
+  }
+
+  .pair-title {
+    font-family: var(--font-hero);
+    font-weight: 500;
+    font-size: 22px;
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+    margin: 28px 0 6px;
+  }
+  .pair-sub {
+    color: var(--text-2);
+    font-size: 13px;
+    margin: 0 0 24px;
+    line-height: 1.55;
+  }
+  .btn-lg {
+    padding: 12px 16px;
+    font-size: 13.5px;
+    width: 100%;
+    margin-bottom: 8px;
+  }
+  .btn-google {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+  }
+  .or {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 20px 0;
+    color: var(--text-3);
+    font-size: 11px;
+    font-family: var(--font-num);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+  .or::before,
+  .or::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+  .code-label {
+    font-size: 12px;
+    color: var(--text-2);
+    margin-bottom: 10px;
+  }
+  .code-row {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 6px;
+  }
+  .code-box {
+    aspect-ratio: 1;
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-num);
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text);
+    transition: border-color 0.15s;
+  }
+  .code-box.filled {
+    border-color: var(--green);
+  }
+  .code-box.cursor {
+    border-color: var(--text);
+  }
+  .code-box.cursor::after {
+    content: '';
+    width: 1px;
+    height: 18px;
+    background: var(--text);
+    animation: blink 1.1s step-end infinite;
+  }
+  @keyframes blink {
+    50% {
+      opacity: 0;
+    }
+  }
+
+  .paired-check {
+    width: 56px;
+    height: 56px;
+    margin: 32px auto 20px;
+    border-radius: 50%;
+    background: var(--green-bg);
+    border: 1px solid var(--green-border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--green);
+  }
+  .paired-email {
+    font-family: var(--font-num);
+    font-size: 13px;
+    color: var(--text);
+    text-align: center;
+    margin-bottom: 6px;
+  }
+  .paired-body {
+    text-align: center;
+  }
+  .paired-label {
+    color: var(--text-3);
+    font-size: 12px;
+    margin-bottom: 4px;
+  }
+  .paired-next {
+    text-align: center;
+    color: var(--text-2);
+    font-size: 13px;
+    margin: 24px 0 0;
+  }
+
+  /* ── Onboarding inputs ─────────────────────────────────────── */
+  .field {
+    margin-bottom: 20px;
+  }
+  .field-label {
+    display: block;
+    font-size: 12px;
+    color: var(--text-2);
+    margin-bottom: 8px;
+  }
+  .field-sub {
+    font-family: var(--font-num);
+    font-size: 11px;
+    color: var(--text-3);
+    margin-left: 6px;
+  }
+  .input {
+    width: 100%;
+    padding: 12px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-md);
+    color: var(--text);
+    font-family: var(--font-num);
+    font-size: 16px;
+    font-variant-numeric: tabular-nums;
+    transition: border-color 0.15s;
+  }
+  .input:focus {
+    outline: none;
+    border-color: var(--text-2);
+  }
+  .input-prefix {
+    position: relative;
+  }
+  .input-prefix .prefix {
+    position: absolute;
+    left: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-3);
+    font-family: var(--font-num);
+    font-size: 16px;
+    pointer-events: none;
+  }
+  .input-prefix .input {
+    padding-left: 30px;
+  }
+
+  /* ── Rule rows ─────────────────────────────────────────────── */
+  .rule {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 12px;
+    padding: 16px 0;
+    border-bottom: 1px solid var(--border);
+    align-items: start;
+  }
+  .rule:last-child {
+    border-bottom: none;
+  }
+  .rule-title {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text);
+    margin: 0 0 4px;
+  }
+  .rule-value {
+    font-family: var(--font-num);
+    font-size: 13px;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  .rule-consequence {
+    font-size: 12.5px;
+    color: var(--text-2);
+    line-height: 1.5;
+    margin-top: 4px;
+  }
+  .edit-link {
+    color: var(--text-3);
+    font-size: 12px;
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 4px 6px;
+    font-family: inherit;
+    border-radius: var(--r-sm);
+  }
+  .edit-link:hover {
+    color: var(--text);
+    background: var(--surface);
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     OVERLAY (full-screen block) — shown inside a frame
+     ══════════════════════════════════════════════════════════ */
+  .overlay-frame {
+    width: 640px;
+    aspect-ratio: 3 / 2;
+    border-radius: var(--r-xl);
+    overflow: hidden;
+    border: 1px solid var(--border);
+    position: relative;
+    background: #0a0b0f url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect fill="%23151922" width="100" height="100"/><path d="M0 0h100v2H0zM0 98h100v2H0z" fill="%23202634" opacity="0.5"/></svg>');
+    background-size: 20px 20px;
+  }
+  .overlay-frame::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    backdrop-filter: blur(8px);
+    background: rgba(5, 6, 8, 0.7);
+  }
+  .overlay-stop {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+    text-align: center;
+  }
+  .stop-word {
+    font-family: var(--font-hero);
+    font-weight: 500;
+    font-size: 72px;
+    line-height: 1;
+    letter-spacing: -0.03em;
+    color: var(--text);
+    margin: 0 0 16px;
+  }
+  .stop-line1 {
+    font-size: 18px;
+    color: var(--text);
+    margin: 0 0 4px;
+    font-variant-numeric: tabular-nums;
+  }
+  .stop-line2 {
+    font-size: 18px;
+    color: var(--text-2);
+    margin: 0 0 28px;
+    font-variant-numeric: tabular-nums;
+  }
+  .stop-consequence {
+    font-size: 14px;
+    color: var(--text-2);
+    max-width: 380px;
+    line-height: 1.55;
+    margin: 0 0 28px;
+  }
+  .stop-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 280px;
+    margin-bottom: 20px;
+  }
+  .btn-stop-primary {
+    padding: 12px 18px;
+    background: var(--green);
+    border: 1px solid var(--green);
+    color: #06240e;
+    border-radius: var(--r-md);
+    font-family: var(--font-ui);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn-stop-cancel {
+    padding: 12px 18px;
+    background: transparent;
+    border: 1px solid var(--border-2);
+    color: var(--text);
+    border-radius: var(--r-md);
+    font-family: var(--font-ui);
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .override-link {
+    color: var(--text-3);
+    font-size: 12px;
+    font-family: var(--font-num);
+    letter-spacing: 0.04em;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px 8px;
+  }
+  .override-link:hover {
+    color: var(--text-2);
+  }
+
+  /* ── Reconcile toast ───────────────────────────────────────── */
+  .toast-demo {
+    width: 340px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: 16px;
+    box-shadow: var(--shadow-lg);
+  }
+  .toast-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--amber);
+    font-weight: 500;
+    margin-bottom: 10px;
+  }
+  .toast-body {
+    font-size: 12.5px;
+    color: var(--text-2);
+    line-height: 1.5;
+    margin-bottom: 16px;
+  }
+  .toast-body b {
+    color: var(--text);
+    font-family: var(--font-num);
+    font-weight: 500;
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     END OF DAY
+     ══════════════════════════════════════════════════════════ */
+  .eod-title {
+    font-family: var(--font-hero);
+    font-weight: 500;
+    font-size: 40px;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    margin: 40px 0 20px;
+  }
+  .eod-title.good {
+    color: var(--text);
+  }
+  .eod-title.bad {
+    color: var(--text);
+  }
+  .eod-body {
+    font-size: 14px;
+    color: var(--text-2);
+    line-height: 1.65;
+    font-variant-numeric: tabular-nums;
+  }
+  .eod-body strong {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .eod-streak {
+    margin-top: 24px;
+    padding: 14px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12.5px;
+  }
+  .eod-streak-label {
+    color: var(--text-2);
+  }
+  .eod-streak-val {
+    font-family: var(--font-num);
+    color: var(--green);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+  .eod-signoff {
+    margin: 32px 0 4px;
+    font-family: var(--font-hero);
+    font-style: italic;
+    color: var(--text-3);
+    font-size: 15px;
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     DASHBOARD (web) preview
+     ══════════════════════════════════════════════════════════ */
+  .dash {
+    width: 720px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-xl);
+    overflow: hidden;
+    box-shadow: var(--shadow-lg);
+  }
+  .dash-body {
+    padding: 36px 40px 40px;
+  }
+  .dash-kicker {
+    font-family: var(--font-num);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: var(--text-3);
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  .dash-score {
+    font-family: var(--font-num);
+    font-size: 112px;
+    font-weight: 600;
+    line-height: 0.95;
+    letter-spacing: -0.045em;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    margin: 0 0 6px;
+  }
+  .dash-score-label {
+    font-size: 14px;
+    color: var(--text-2);
+    margin-bottom: 28px;
+  }
+  .dash-insight {
+    font-family: var(--font-hero);
+    font-weight: 400;
+    font-style: italic;
+    font-size: 22px;
+    line-height: 1.45;
+    letter-spacing: -0.01em;
+    color: var(--text);
+    max-width: 520px;
+    margin: 0 0 8px;
+  }
+  .dash-insight-meta {
+    font-family: var(--font-num);
+    font-size: 11px;
+    color: var(--text-3);
+    letter-spacing: 0.06em;
+  }
+
+  .dash-triple {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+    margin-top: 12px;
+  }
+  .dash-mini {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: 20px;
+  }
+  .dash-mini-label {
+    font-family: var(--font-num);
+    font-size: 10.5px;
+    color: var(--text-3);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .dash-mini-title {
+    font-size: 14px;
+    color: var(--text);
+    font-weight: 500;
+    margin-bottom: 16px;
+  }
+
+  /* Heatmap */
+  .heat {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 3px;
+  }
+  .heat-cell {
+    aspect-ratio: 1;
+    border-radius: 2px;
+    background: var(--surface);
+  }
+  .heat-cell.g1 {
+    background: rgba(74, 222, 128, 0.12);
+  }
+  .heat-cell.g2 {
+    background: rgba(74, 222, 128, 0.24);
+  }
+  .heat-cell.g3 {
+    background: rgba(74, 222, 128, 0.44);
+  }
+  .heat-cell.g4 {
+    background: rgba(74, 222, 128, 0.7);
+  }
+  .heat-cell.r1 {
+    background: rgba(239, 68, 68, 0.14);
+  }
+  .heat-cell.r2 {
+    background: rgba(239, 68, 68, 0.28);
+  }
+  .heat-cell.r3 {
+    background: rgba(239, 68, 68, 0.5);
+  }
+  .heat-cell.r4 {
+    background: rgba(239, 68, 68, 0.74);
+  }
+
+  .rule-pressure {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .rp-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+  }
+  .rp-name {
+    flex: 1;
+    color: var(--text-2);
+  }
+  .rp-bar {
+    width: 80px;
+    height: 4px;
+    background: var(--surface);
+    border-radius: var(--r-pill);
+    overflow: hidden;
+  }
+  .rp-bar-fill {
+    height: 100%;
+    background: var(--amber);
+    border-radius: var(--r-pill);
+  }
+  .rp-count {
+    width: 24px;
+    text-align: right;
+    font-family: var(--font-num);
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     JOURNAL DETAIL
+     ══════════════════════════════════════════════════════════ */
+  .journal {
+    width: 560px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-xl);
+    padding: 32px;
+    box-shadow: var(--shadow-lg);
+  }
+  .j-head {
+    font-family: var(--font-num);
+    font-size: 12px;
+    color: var(--text-3);
+    letter-spacing: 0.04em;
+    font-variant-numeric: tabular-nums;
+    margin-bottom: 24px;
+  }
+  .j-head b {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .j-pnl {
+    font-family: var(--font-num);
+    font-size: 44px;
+    font-weight: 600;
+    color: var(--green);
+    line-height: 1;
+    margin-bottom: 4px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+  }
+  .j-pnl-sub {
+    font-family: var(--font-num);
+    font-size: 12px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+    margin-bottom: 32px;
+  }
+  .j-section {
+    margin-bottom: 28px;
+  }
+  .j-label {
+    font-family: var(--font-num);
+    font-size: 10.5px;
+    color: var(--text-3);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+  .j-tags {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .j-tag {
+    font-size: 13.5px;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .j-tag::before {
+    content: '';
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--green);
+    flex-shrink: 0;
+  }
+  .j-ai {
+    font-family: var(--font-hero);
+    font-style: italic;
+    font-size: 17px;
+    line-height: 1.55;
+    letter-spacing: -0.005em;
+    color: var(--text);
+    padding-left: 16px;
+    border-left: 2px solid var(--green);
+    margin: 0;
+  }
+  .j-note-btn {
+    margin-top: 20px;
+    padding: 10px 14px;
+    background: transparent;
+    border: 1px dashed var(--border-2);
+    color: var(--text-3);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    border-radius: var(--r-md);
+    cursor: pointer;
+    width: 100%;
+    text-align: left;
+  }
+  .j-note-btn:hover {
+    border-color: var(--border-hi);
+    color: var(--text-2);
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     SETTINGS (brokers / billing)
+     ══════════════════════════════════════════════════════════ */
+  .settings {
+    width: 640px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-xl);
+    padding: 32px;
+    box-shadow: var(--shadow-lg);
+  }
+  .settings-head {
+    font-family: var(--font-hero);
+    font-weight: 500;
+    font-size: 22px;
+    letter-spacing: -0.01em;
+    margin: 0 0 24px;
+  }
+  .broker-row {
+    display: grid;
+    grid-template-columns: 8px 1fr auto;
+    gap: 16px;
+    padding: 18px 0;
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+  }
+  .broker-row:last-child {
+    border-bottom: none;
+  }
+  .broker-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 8px rgba(74, 222, 128, 0.5);
+  }
+  .broker-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text);
+    margin: 0 0 2px;
+  }
+  .broker-meta {
+    font-family: var(--font-num);
+    font-size: 11.5px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+  }
+  .broker-add {
+    margin-top: 20px;
+    width: 100%;
+    padding: 14px;
+    background: transparent;
+    border: 1px dashed var(--border-2);
+    color: var(--text-2);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    border-radius: var(--r-md);
+    cursor: pointer;
+  }
+  .broker-add:hover {
+    border-color: var(--border-hi);
+    color: var(--text);
+  }
+
+  .billing-hero {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding-bottom: 20px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .billing-plan {
+    font-size: 15px;
+    font-weight: 500;
+    margin-bottom: 4px;
+  }
+  .billing-price {
+    font-family: var(--font-num);
+    font-size: 24px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+  }
+  .billing-price .small {
+    color: var(--text-3);
+    font-size: 14px;
+  }
+  .billing-next {
+    color: var(--text-3);
+    font-size: 12px;
+    font-family: var(--font-num);
+  }
+  .billing-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .bs-item {
+    padding: 16px;
+    background: var(--surface);
+    border-radius: var(--r-md);
+    border: 1px solid var(--border);
+  }
+  .bs-num {
+    font-family: var(--font-num);
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+    margin-bottom: 4px;
+  }
+  .bs-num.green {
+    color: var(--green);
+  }
+  .bs-label {
+    font-size: 11.5px;
+    color: var(--text-2);
+  }
+
+  .billing-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .billing-cancel {
+    color: var(--text-3);
+    background: transparent;
+    border: 1px solid var(--border);
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     BROKER MAPPING
+     ══════════════════════════════════════════════════════════ */
+  .map-title {
+    font-family: var(--font-hero);
+    font-weight: 500;
+    font-size: 22px;
+    letter-spacing: -0.01em;
+    margin: 24px 0 6px;
+  }
+  .map-sub {
+    color: var(--text-2);
+    font-size: 13px;
+    margin: 0 0 24px;
+    line-height: 1.55;
+  }
+  .map-step {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .map-step:last-child {
+    border-bottom: none;
+  }
+  .map-step-name {
+    color: var(--text);
+  }
+  .map-check {
+    color: var(--green);
+    font-family: var(--font-num);
+    font-size: 14px;
+  }
+  .map-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--border-2);
+    border-top-color: var(--text);
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  .map-pending {
+    color: var(--text-4);
+    font-family: var(--font-num);
+    font-size: 14px;
+  }
+  .map-meta {
+    margin-top: 20px;
+    font-family: var(--font-num);
+    font-size: 11.5px;
+    color: var(--text-3);
+    text-align: center;
+    letter-spacing: 0.02em;
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     EMPTY STATE
+     ══════════════════════════════════════════════════════════ */
+  .empty {
+    text-align: center;
+    padding: 16px 8px;
+  }
+  .empty-title {
+    font-family: var(--font-hero);
+    font-weight: 500;
+    font-size: 22px;
+    margin: 28px 0 12px;
+    letter-spacing: -0.01em;
+  }
+  .empty-body {
+    color: var(--text-2);
+    font-size: 13px;
+    line-height: 1.6;
+    margin: 0 0 24px;
+  }
+  .empty-rule {
+    font-family: var(--font-num);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: 12px 14px;
+    font-size: 12.5px;
+    color: var(--text);
+    display: inline-block;
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     TOKENS PANEL
+     ══════════════════════════════════════════════════════════ */
+  .tokens {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 24px;
+  }
+  .token-group {
+    padding: 24px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+  }
+  .token-group-title {
+    font-family: var(--font-num);
+    font-size: 11px;
+    color: var(--text-3);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+  .swatch-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+    font-size: 12.5px;
+    font-family: var(--font-num);
+  }
+  .swatch {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .swatch-label {
+    color: var(--text);
+  }
+  .swatch-hex {
+    color: var(--text-3);
+    margin-left: auto;
+  }
+  .type-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .type-row:last-child {
+    border-bottom: none;
+  }
+  .type-sample {
+    color: var(--text);
+  }
+  .type-meta {
+    font-family: var(--font-num);
+    font-size: 11px;
+    color: var(--text-3);
+  }
+
+  @media (max-width: 720px) {
+    .page {
+      padding: 40px 20px 80px;
+    }
+    .hero-title {
+      font-size: 40px;
+    }
+    .dash,
+    .journal,
+    .settings,
+    .overlay-frame {
+      width: 100%;
+      max-width: 100%;
+    }
+    .overlay-frame {
+      aspect-ratio: auto;
+      min-height: 480px;
+    }
+  }
+</style>
+</head>
+
+<body>
+<main class="page">
+
+  <!-- ═════════════ HEADER ═════════════ -->
+  <header class="hero">
+    <div class="kicker">TradeGuardX · Visual redesign · v2</div>
+    <h1 class="hero-title">One number.<br />One color. <em>One decision.</em></h1>
+    <p class="hero-sub">
+      A trader opens this 50 times a session. Every surface below earns its
+      place or dies. Dark mode by default. Numbers lead. Serif for moments,
+      not decoration.
+    </p>
+  </header>
+
+  <!-- ═════════════ 1. PAIRING ═════════════ -->
+  <section class="section">
+    <div class="section-head">
+      <div class="section-num">01 · Pairing</div>
+      <h2 class="section-title">The first 60 seconds.</h2>
+      <p class="section-sub">
+        No 6-digit code ceremony. OAuth first, code as fallback. Popup
+        transitions to onboarding automatically on success.
+      </p>
+    </div>
+
+    <div class="grid">
+      <!-- Unpaired / sign-in -->
+      <div class="cell">
+        <span class="cell-label"><b>01.a</b> Unpaired · first open</span>
+        <div class="popup">
+          <div class="popup-body-lg">
+            <div class="brand">
+              <div class="logo">T</div>
+              <div class="brand-name">Trade<em>Guard</em>X</div>
+            </div>
+            <h3 class="pair-title">Let's connect this browser.</h3>
+            <p class="pair-sub">Sign in so your rules, trades, and journal stay in sync across devices.</p>
+            <button class="btn btn-primary btn-lg btn-google">
+              <svg width="16" height="16" viewBox="0 0 48 48" fill="none">
+                <path fill="#4285F4" d="M44 20H24v8h11.3c-1.5 4.5-5.7 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3 0 5.7 1.1 7.8 3l5.7-5.7C33.9 6 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.7-.4-4z"/>
+              </svg>
+              Continue with Google
+            </button>
+            <button class="btn btn-lg btn-ghost">Continue with email</button>
+
+            <div class="or">or</div>
+
+            <div class="code-label">Paste a pairing code</div>
+            <div class="code-row">
+              <div class="code-box filled">7</div>
+              <div class="code-box filled">K</div>
+              <div class="code-box filled">9</div>
+              <div class="code-box cursor"></div>
+              <div class="code-box"></div>
+              <div class="code-box"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Waiting -->
+      <div class="cell">
+        <span class="cell-label"><b>01.b</b> Signing in · waiting</span>
+        <div class="popup">
+          <div class="popup-body-lg">
+            <div class="brand" style="margin-bottom:40px">
+              <div class="logo">T</div>
+              <div class="brand-name">Trade<em>Guard</em>X</div>
+            </div>
+            <div class="status" style="background:transparent;border-color:var(--border-2)">
+              <span class="dot amber"></span>Waiting for sign-in…
+            </div>
+            <h3 class="pair-title" style="margin-top:20px;font-size:19px">A tab opened.</h3>
+            <p class="pair-sub">
+              Finish signing in there — this updates automatically when you're done.
+            </p>
+            <div class="hr"></div>
+            <button class="btn btn-ghost" style="width:100%">Trouble? Use a code instead →</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Paired -->
+      <div class="cell">
+        <span class="cell-label"><b>01.c</b> Paired · 2s confirmation</span>
+        <div class="popup">
+          <div class="popup-body-lg">
+            <div class="paired-check">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <div class="paired-body">
+              <div class="paired-label">Signed in as</div>
+              <div class="paired-email">pathakprashant841@gmail.com</div>
+            </div>
+            <p class="paired-next">Next: set your daily limits →</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════ 2. ONBOARDING ═════════════ -->
+  <section class="section">
+    <div class="section-head">
+      <div class="section-num">02 · Onboarding</div>
+      <h2 class="section-title">One screen. Three commitments.</h2>
+      <p class="section-sub">
+        Autofills account size from the detected broker. No multi-step tutorial — one screen, one commit.
+      </p>
+    </div>
+    <div class="grid">
+      <div class="cell">
+        <span class="cell-label"><b>02</b> Before you trade today</span>
+        <div class="popup">
+          <div class="popup-body-lg">
+            <h3 class="pair-title" style="margin-top:4px">Before you trade today.</h3>
+            <p class="pair-sub">Change these anytime in Rules.</p>
+
+            <div class="field">
+              <label class="field-label">Account size</label>
+              <div class="input-prefix">
+                <span class="prefix">$</span>
+                <input class="input" value="50,000" />
+              </div>
+            </div>
+
+            <div class="field">
+              <label class="field-label">
+                Max loss per day
+                <span class="field-sub">2% · standard</span>
+              </label>
+              <div class="input-prefix">
+                <span class="prefix">$</span>
+                <input class="input" value="1,000" />
+              </div>
+            </div>
+
+            <div class="field">
+              <label class="field-label">
+                Max risk per trade
+                <span class="field-sub">1% · standard</span>
+              </label>
+              <div class="input-prefix">
+                <span class="prefix">$</span>
+                <input class="input" value="500" />
+              </div>
+            </div>
+
+            <button class="btn btn-primary btn-lg" style="margin-top:8px">That's my plan</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════ 3. POPUP DAILY ═════════════ -->
+  <section class="section">
+    <div class="section-head">
+      <div class="section-num">03 · Popup · daily surface</div>
+      <h2 class="section-title">One number at the top.</h2>
+      <p class="section-sub">
+        Same skeleton, three contexts. Budget remaining when flat, floating P&amp;L in-trade, advisory copy in caution.
+      </p>
+    </div>
+
+    <div class="grid">
+      <!-- Flat / safe -->
+      <div class="cell">
+        <span class="cell-label"><b>03.a</b> Flat · safe to trade</span>
+        <div class="popup">
+          <div class="popup-body">
+            <div class="topbar">
+              <div class="status"><span class="dot green"></span>Safe to trade</div>
+              <button class="icon-btn" title="Settings">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+              </button>
+            </div>
+
+            <div class="hero-num green">$847</div>
+            <div class="hero-num-sub">left before daily limit</div>
+
+            <div class="progress"><div class="progress-fill" style="width:15%"></div></div>
+            <div class="progress-meta">
+              <span>$153 used</span><span>$1,000 limit</span>
+            </div>
+
+            <div class="hr"></div>
+
+            <div class="recap">
+              <div class="recap-k">Today</div>
+              <div class="recap-v"><span class="pos">+$143</span><span class="sep">·</span><span>3 trades</span><span class="sep">·</span><span class="dim">2W 1L</span></div>
+            </div>
+            <div class="recap">
+              <div class="recap-k">Week</div>
+              <div class="recap-v"><span class="pos">+$612</span><span class="sep">·</span><span>68% discipline</span></div>
+            </div>
+
+            <div class="actions">
+              <button class="btn btn-full">Journal</button>
+              <button class="btn btn-full">Rules</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- In-trade -->
+      <div class="cell">
+        <span class="cell-label"><b>03.b</b> In-trade · live</span>
+        <div class="popup">
+          <div class="popup-body">
+            <div class="topbar">
+              <div class="status"><span class="dot green"></span>1 position · NAS100 long</div>
+              <button class="icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/></svg></button>
+            </div>
+
+            <div class="hero-num green">+$47.20</div>
+            <div class="hero-num-sub">open on NAS100 · 14m held</div>
+
+            <div class="trade-meta">
+              <div class="tm-item">
+                <div class="tm-label">Risk</div>
+                <div class="tm-value"><span class="neg">$120</span><span class="small">0.6R</span></div>
+              </div>
+              <div class="tm-item">
+                <div class="tm-label">Target</div>
+                <div class="tm-value"><span class="pos">$360</span><span class="small">3R</span></div>
+              </div>
+              <div class="tm-item">
+                <div class="tm-label">Stop</div>
+                <div class="tm-value">15,420</div>
+              </div>
+              <div class="tm-item">
+                <div class="tm-label">Take profit</div>
+                <div class="tm-value">15,510</div>
+              </div>
+            </div>
+
+            <div class="inline-kv">
+              <span>Daily budget</span><span><strong style="color:var(--text)">$800</strong> left</span>
+            </div>
+            <div class="progress" style="margin-top:10px"><div class="progress-fill" style="width:20%"></div></div>
+
+            <div class="actions">
+              <button class="btn btn-full">Close trade</button>
+              <button class="btn btn-icon" title="Move SL to breakeven"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Caution -->
+      <div class="cell">
+        <span class="cell-label"><b>03.c</b> Caution · 70%+ used</span>
+        <div class="popup" style="background:linear-gradient(180deg,rgba(245,158,11,0.05),var(--bg) 45%)">
+          <div class="popup-body">
+            <div class="topbar">
+              <div class="status" style="background:var(--amber-bg);border-color:var(--amber-border);color:var(--amber)">
+                <span class="dot amber"></span>Approaching limit
+              </div>
+              <button class="icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/></svg></button>
+            </div>
+
+            <div class="hero-num amber">$287</div>
+            <div class="hero-num-sub">left before daily limit</div>
+
+            <div class="progress"><div class="progress-fill amber" style="width:71%"></div></div>
+            <div class="progress-meta">
+              <span>$713 used</span><span>$1,000 limit</span>
+            </div>
+
+            <div class="hr"></div>
+
+            <p style="font-family:var(--font-hero);font-style:italic;font-size:15px;color:var(--text);margin:4px 0 0;line-height:1.5">
+              One more losing trade at current size hits your limit.
+            </p>
+
+            <div class="actions">
+              <button class="btn btn-full">Review plan</button>
+              <button class="btn btn-ghost btn-full">Keep trading</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════ 4. BLOCK OVERLAY ═════════════ -->
+  <section class="section">
+    <div class="section-head">
+      <div class="section-num">04 · Block overlay</div>
+      <h2 class="section-title">The moment that earns the subscription.</h2>
+      <p class="section-sub">
+        Full-screen. Broker blurred behind. "Stop." in serif. One safe action. Override requires typing — impulse friction wins.
+      </p>
+    </div>
+    <div class="grid grid-wide">
+      <div class="cell">
+        <span class="cell-label"><b>04</b> Rule about to break · trade blocked</span>
+        <div class="overlay-frame">
+          <div class="overlay-stop">
+            <h2 class="stop-word">Stop.</h2>
+            <p class="stop-line1">This trade risks <b>$450</b>.</p>
+            <p class="stop-line2">You have <b>$287</b> of daily budget left.</p>
+            <p class="stop-consequence">If it loses, your account is done for the day.</p>
+            <div class="stop-actions">
+              <button class="btn-stop-primary">Reduce size to 0.3 lots</button>
+              <button class="btn-stop-cancel">Cancel this trade</button>
+            </div>
+            <button class="override-link">override anyway →</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════ 5. TOASTS & BROKER MAPPING ═════════════ -->
+  <section class="section">
+    <div class="section-head">
+      <div class="section-num">05 · Quieter moments</div>
+      <h2 class="section-title">Reconcile and mapping.</h2>
+      <p class="section-sub">
+        Non-blocking toast when broker and extension disagree — broker wins by default. Broker mapping is a visible moment, not a silent spinner.
+      </p>
+    </div>
+
+    <div class="grid">
+      <!-- Reconcile toast -->
+      <div class="cell">
+        <span class="cell-label"><b>05.a</b> Reconcile · bottom-right toast</span>
+        <div class="toast-demo">
+          <div class="toast-head">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            Numbers don't match
+          </div>
+          <div class="toast-body">
+            Broker shows <b>2 trades</b>. Extension tracked <b>3</b>.
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-primary btn-full" style="padding:8px 12px;font-size:12px">Trust broker</button>
+            <button class="btn btn-full" style="padding:8px 12px;font-size:12px">Keep ours</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Mapping in progress -->
+      <div class="cell">
+        <span class="cell-label"><b>05.b</b> Broker mapping · AI learning</span>
+        <div class="popup">
+          <div class="popup-body-lg">
+            <div class="brand"><div class="logo">T</div><div class="brand-name">Trade<em>Guard</em>X</div></div>
+            <h3 class="map-title">Learning this broker…</h3>
+            <p class="map-sub">TradeGuardX hasn't seen this layout before. Hold tight — 20 to 40 seconds typical.</p>
+
+            <div class="map-step">
+              <span class="map-step-name">Positions table</span>
+              <span class="map-check">✓</span>
+            </div>
+            <div class="map-step">
+              <span class="map-step-name">P&L column</span>
+              <span class="map-check">✓</span>
+            </div>
+            <div class="map-step">
+              <span class="map-step-name">Stop loss field</span>
+              <span class="map-spinner"></span>
+            </div>
+            <div class="map-step">
+              <span class="map-step-name" style="color:var(--text-3)">Take profit field</span>
+              <span class="map-pending">·</span>
+            </div>
+
+            <div class="map-meta">host: thefundedroom.com</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════ 6. END OF DAY ═════════════ -->
+  <section class="section">
+    <div class="section-head">
+      <div class="section-num">06 · End of day</div>
+      <h2 class="section-title">The lovable moment.</h2>
+      <p class="section-sub">
+        Fires when markets close. Honest. Specific. Non-judgmental. This is what turns a utility into something traders tell friends about.
+      </p>
+    </div>
+
+    <div class="grid">
+      <!-- Good day -->
+      <div class="cell">
+        <span class="cell-label"><b>06.a</b> Clean session</span>
+        <div class="popup">
+          <div class="popup-body-lg">
+            <div class="topbar">
+              <div class="status"><span class="dot green"></span>Session closed</div>
+            </div>
+            <h2 class="eod-title good">Good day.</h2>
+            <p class="eod-body">
+              <strong>+$243</strong> · 4 trades · no overrides.
+            </p>
+
+            <div class="eod-streak">
+              <span class="eod-streak-label">Discipline streak</span>
+              <span class="eod-streak-val">9 sessions</span>
+            </div>
+
+            <p class="eod-signoff">See you tomorrow.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Rough day -->
+      <div class="cell">
+        <span class="cell-label"><b>06.b</b> Rough one</span>
+        <div class="popup">
+          <div class="popup-body-lg">
+            <div class="topbar">
+              <div class="status" style="background:var(--red-bg);border-color:var(--red-border);color:var(--red)">
+                <span class="dot red"></span>Session closed
+              </div>
+            </div>
+            <h2 class="eod-title bad">Rough one.</h2>
+            <p class="eod-body">
+              You overrode the size limit <strong>twice</strong>. Both trades lost.
+            </p>
+
+            <div class="eod-streak">
+              <span class="eod-streak-label">Discipline streak</span>
+              <span class="eod-streak-val" style="color:var(--text-3)">reset</span>
+            </div>
+
+            <p class="eod-signoff">Tomorrow: trust the rules.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════ 7. DASHBOARD ═════════════ -->
+  <section class="section">
+    <div class="section-head">
+      <div class="section-num">07 · Dashboard (web)</div>
+      <h2 class="section-title">Discipline, not equity curves.</h2>
+      <p class="section-sub">
+        Every broker already shows your P&amp;L. We show what no broker does: your behavior, named.
+      </p>
+    </div>
+
+    <div class="cell" style="max-width:720px">
+      <span class="cell-label"><b>07</b> This week · hero + three cards</span>
+      <div class="dash">
+        <div class="dash-body">
+          <div class="dash-kicker">This week</div>
+          <div class="dash-score">82</div>
+          <div class="dash-score-label">discipline score</div>
+          <p class="dash-insight">
+            "You traded <b>3× more</b> on Tuesday after a losing morning. 71% of those trades lost."
+          </p>
+          <div class="dash-insight-meta">AI READ · March 17–21</div>
+
+          <div class="dash-triple">
+            <div class="dash-mini">
+              <div class="dash-mini-label">When you win</div>
+              <div class="dash-mini-title">Hour × day</div>
+              <div class="heat">
+                <div class="heat-cell"></div><div class="heat-cell g1"></div><div class="heat-cell g3"></div><div class="heat-cell g2"></div><div class="heat-cell"></div>
+                <div class="heat-cell g1"></div><div class="heat-cell g2"></div><div class="heat-cell g4"></div><div class="heat-cell g3"></div><div class="heat-cell g1"></div>
+                <div class="heat-cell"></div><div class="heat-cell g1"></div><div class="heat-cell g2"></div><div class="heat-cell g1"></div><div class="heat-cell"></div>
+                <div class="heat-cell"></div><div class="heat-cell"></div><div class="heat-cell g1"></div><div class="heat-cell"></div><div class="heat-cell"></div>
+              </div>
+            </div>
+            <div class="dash-mini">
+              <div class="dash-mini-label">When you tilt</div>
+              <div class="dash-mini-title">Hour × day</div>
+              <div class="heat">
+                <div class="heat-cell"></div><div class="heat-cell"></div><div class="heat-cell r1"></div><div class="heat-cell"></div><div class="heat-cell"></div>
+                <div class="heat-cell"></div><div class="heat-cell r2"></div><div class="heat-cell r4"></div><div class="heat-cell r2"></div><div class="heat-cell"></div>
+                <div class="heat-cell"></div><div class="heat-cell r1"></div><div class="heat-cell r3"></div><div class="heat-cell r1"></div><div class="heat-cell"></div>
+                <div class="heat-cell"></div><div class="heat-cell"></div><div class="heat-cell r1"></div><div class="heat-cell"></div><div class="heat-cell"></div>
+              </div>
+            </div>
+            <div class="dash-mini">
+              <div class="dash-mini-label">Rule pressure</div>
+              <div class="dash-mini-title">Fires this week</div>
+              <div class="rule-pressure">
+                <div class="rp-row"><span class="rp-name">Daily loss</span><span class="rp-bar"><span class="rp-bar-fill" style="width:80%"></span></span><span class="rp-count">8</span></div>
+                <div class="rp-row"><span class="rp-name">Per-trade risk</span><span class="rp-bar"><span class="rp-bar-fill" style="width:60%;background:var(--text-2)"></span></span><span class="rp-count">6</span></div>
+                <div class="rp-row"><span class="rp-name">Hedging</span><span class="rp-bar"><span class="rp-bar-fill" style="width:20%;background:var(--text-3)"></span></span><span class="rp-count">2</span></div>
+                <div class="rp-row"><span class="rp-name">Drawdown</span><span class="rp-bar"><span class="rp-bar-fill" style="width:10%;background:var(--text-3)"></span></span><span class="rp-count">1</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════ 8. JOURNAL DETAIL ═════════════ -->
+  <section class="section">
+    <div class="section-head">
+      <div class="section-num">08 · Journal detail</div>
+      <h2 class="section-title">What no broker can tell you.</h2>
+      <p class="section-sub">
+        Behavior tags generated per trade. AI reads aloud what you're doing — patterns you can't see yourself. This is the moat.
+      </p>
+    </div>
+
+    <div class="cell">
+      <span class="cell-label"><b>08</b> Trade detail · NAS100 · +$243</span>
+      <div class="journal">
+        <div class="j-head"><b>NAS100</b> · Long · 0.5 lots · <span>Mar 23, 2026 · 14:23 → 14:47 · 24m</span></div>
+        <div class="j-pnl">+$243</div>
+        <div class="j-pnl-sub">realized · 2.03R</div>
+
+        <div class="j-section">
+          <div class="j-label">Behavior</div>
+          <div class="j-tags">
+            <div class="j-tag">Followed plan</div>
+            <div class="j-tag">Partial exit at 2R</div>
+            <div class="j-tag">No breakeven delay</div>
+          </div>
+        </div>
+
+        <div class="j-section">
+          <div class="j-label">AI read</div>
+          <p class="j-ai">
+            Clean execution. Entry aligned with your best NAS100 wins — premarket high retest. You took partial quickly, matching your most-profitable pattern.
+          </p>
+        </div>
+
+        <button class="j-note-btn">+ note to self</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════ 9. RULES ═════════════ -->
+  <section class="section">
+    <div class="section-head">
+      <div class="section-num">09 · Rules</div>
+      <h2 class="section-title">Your trading plan, in plain English.</h2>
+      <p class="section-sub">
+        Every rule has its consequence spelled out directly under it. No toggles, no modals. Inline edit.
+      </p>
+    </div>
+
+    <div class="cell">
+      <span class="cell-label"><b>09</b> Rules configuration</span>
+      <div class="settings">
+        <h3 class="settings-head">Your trading plan</h3>
+
+        <div class="rule">
+          <div>
+            <div class="rule-title">Daily loss limit <span class="rule-value" style="margin-left:8px;color:var(--text-3)">$1,000</span></div>
+            <div class="rule-consequence">I stop trading for the day.</div>
+          </div>
+          <button class="edit-link">edit</button>
+        </div>
+
+        <div class="rule">
+          <div>
+            <div class="rule-title">Per-trade risk <span class="rule-value" style="margin-left:8px;color:var(--text-3)">$500</span></div>
+            <div class="rule-consequence">Oversized trades are blocked.</div>
+          </div>
+          <button class="edit-link">edit</button>
+        </div>
+
+        <div class="rule">
+          <div>
+            <div class="rule-title">Hedging <span class="rule-value" style="margin-left:8px;color:var(--text-3)">blocked</span></div>
+            <div class="rule-consequence">No opposing positions on same symbol.</div>
+          </div>
+          <button class="edit-link">edit</button>
+        </div>
+
+        <div class="rule">
+          <div>
+            <div class="rule-title">Drawdown auto-close <span class="rule-value" style="margin-left:8px;color:var(--text-3)">4%</span></div>
+            <div class="rule-consequence">Closes everything if equity drops this far from peak.</div>
+          </div>
+          <button class="edit-link">edit</button>
+        </div>
+
+        <button class="broker-add">+ add a rule</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════ 10. SETTINGS: BROKERS ═════════════ -->
+  <section class="section">
+    <div class="section-head">
+      <div class="section-num">10 · Settings · brokers</div>
+      <h2 class="section-title">Transparency signals competence.</h2>
+      <p class="section-sub">
+        Show when each broker's layout was last mapped. If it's old, the user knows why to refresh. Building trust through visibility.
+      </p>
+    </div>
+
+    <div class="cell">
+      <span class="cell-label"><b>10</b> Brokers connected</span>
+      <div class="settings">
+        <h3 class="settings-head">Brokers</h3>
+
+        <div class="broker-row">
+          <span class="broker-dot"></span>
+          <div>
+            <div class="broker-name">TFR Live 50K</div>
+            <div class="broker-meta">connected 2h ago · layout learned 2026-01-12</div>
+          </div>
+          <button class="btn btn-ghost">Disconnect</button>
+        </div>
+
+        <div class="broker-row">
+          <span class="broker-dot" style="background:var(--text-3);box-shadow:none"></span>
+          <div>
+            <div class="broker-name">MT5 Demo</div>
+            <div class="broker-meta">connected 3d ago · layout learned 2025-11-08</div>
+          </div>
+          <button class="btn btn-ghost">Disconnect</button>
+        </div>
+
+        <button class="broker-add">+ connect a broker</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════ 11. BILLING ═════════════ -->
+  <section class="section">
+    <div class="section-head">
+      <div class="section-num">11 · Billing</div>
+      <h2 class="section-title">Honest retention.</h2>
+      <p class="section-sub">
+        Show value monthly. Don't hide the cancel button. Traders reward transparency with loyalty.
+      </p>
+    </div>
+
+    <div class="cell">
+      <span class="cell-label"><b>11</b> TradeGuardX Pro</span>
+      <div class="settings">
+        <div class="billing-hero">
+          <div>
+            <div class="billing-plan">TradeGuardX Pro</div>
+            <div class="billing-next">Next billing · May 23, 2026</div>
+          </div>
+          <div class="billing-price">$19<span class="small">/mo</span></div>
+        </div>
+
+        <div class="j-label" style="margin-bottom:12px">This month</div>
+        <div class="billing-stats">
+          <div class="bs-item">
+            <div class="bs-num">14</div>
+            <div class="bs-label">sessions protected</div>
+          </div>
+          <div class="bs-item">
+            <div class="bs-num">3</div>
+            <div class="bs-label">violations prevented</div>
+          </div>
+          <div class="bs-item">
+            <div class="bs-num green">$1,400</div>
+            <div class="bs-label">estimated saved</div>
+          </div>
+        </div>
+
+        <div class="billing-actions">
+          <button class="btn">Update card</button>
+          <button class="btn">Change plan</button>
+          <button class="btn billing-cancel">Cancel subscription</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════ 12. EMPTY STATE ═════════════ -->
+  <section class="section">
+    <div class="section-head">
+      <div class="section-num">12 · Empty state</div>
+      <h2 class="section-title">Honest, not cheerful.</h2>
+      <p class="section-sub">
+        No stock graphics, no "Get started!" button. A true sentence and a reminder of the user's own plan.
+      </p>
+    </div>
+    <div class="grid">
+      <div class="cell">
+        <span class="cell-label"><b>12</b> No trades yet</span>
+        <div class="popup">
+          <div class="popup-body-lg">
+            <div class="empty">
+              <h3 class="empty-title">No trades yet.</h3>
+              <p class="empty-body">
+                Once you place your first trade, TradeGuardX starts learning your patterns. After 10 trades, you'll see behavioral insights.
+              </p>
+              <div class="empty-rule">Today's first rule · Daily loss limit $1,000</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════ 13. DESIGN TOKENS ═════════════ -->
+  <section class="section">
+    <div class="section-head">
+      <div class="section-num">13 · Design tokens</div>
+      <h2 class="section-title">The rules the system follows.</h2>
+      <p class="section-sub">
+        Restraint is the point. Two typefaces for UI + numbers, one serif for hero moments. Three semantic colors. One shadow.
+      </p>
+    </div>
+
+    <div class="tokens">
+      <div class="token-group">
+        <div class="token-group-title">Surfaces</div>
+        <div class="swatch-row"><span class="swatch" style="background:#0b0d10"></span><span class="swatch-label">bg</span><span class="swatch-hex">#0B0D10</span></div>
+        <div class="swatch-row"><span class="swatch" style="background:#13161b"></span><span class="swatch-label">surface</span><span class="swatch-hex">#13161B</span></div>
+        <div class="swatch-row"><span class="swatch" style="background:#1a1e25"></span><span class="swatch-label">surface-2</span><span class="swatch-hex">#1A1E25</span></div>
+        <div class="swatch-row"><span class="swatch" style="background:#20252d"></span><span class="swatch-label">surface-hi</span><span class="swatch-hex">#20252D</span></div>
+      </div>
+
+      <div class="token-group">
+        <div class="token-group-title">Text</div>
+        <div class="swatch-row"><span class="swatch" style="background:#e8eaee"></span><span class="swatch-label">primary</span><span class="swatch-hex">#E8EAEE</span></div>
+        <div class="swatch-row"><span class="swatch" style="background:#9098a4"></span><span class="swatch-label">secondary</span><span class="swatch-hex">#9098A4</span></div>
+        <div class="swatch-row"><span class="swatch" style="background:#5a6370"></span><span class="swatch-label">tertiary</span><span class="swatch-hex">#5A6370</span></div>
+        <div class="swatch-row"><span class="swatch" style="background:#3d444d"></span><span class="swatch-label">quaternary</span><span class="swatch-hex">#3D444D</span></div>
+      </div>
+
+      <div class="token-group">
+        <div class="token-group-title">Semantic</div>
+        <div class="swatch-row"><span class="swatch" style="background:#4ade80"></span><span class="swatch-label">green · earned</span><span class="swatch-hex">#4ADE80</span></div>
+        <div class="swatch-row"><span class="swatch" style="background:#f59e0b"></span><span class="swatch-label">amber · caution</span><span class="swatch-hex">#F59E0B</span></div>
+        <div class="swatch-row"><span class="swatch" style="background:#ef4444"></span><span class="swatch-label">red · reserved</span><span class="swatch-hex">#EF4444</span></div>
+        <div class="swatch-row"><span class="swatch" style="background:#60a5fa"></span><span class="swatch-label">blue · info</span><span class="swatch-hex">#60A5FA</span></div>
+      </div>
+
+      <div class="token-group" style="grid-column:span 2">
+        <div class="token-group-title">Type</div>
+        <div class="type-row">
+          <span class="type-sample" style="font-family:var(--font-hero);font-weight:500;font-size:26px;letter-spacing:-0.015em">Stop. Good day.</span>
+          <span class="type-meta">Fraunces · hero moments</span>
+        </div>
+        <div class="type-row">
+          <span class="type-sample" style="font-family:var(--font-ui);font-weight:500;font-size:15px">UI text, buttons, labels</span>
+          <span class="type-meta">Inter 400/500/600</span>
+        </div>
+        <div class="type-row">
+          <span class="type-sample" style="font-family:var(--font-num);font-size:17px;font-variant-numeric:tabular-nums">+$243.00 · 0.6R · 15,420</span>
+          <span class="type-meta">JetBrains Mono · numbers</span>
+        </div>
+      </div>
+
+      <div class="token-group">
+        <div class="token-group-title">Grid · radius</div>
+        <div class="swatch-row"><span class="swatch-label">base unit</span><span class="swatch-hex">4px</span></div>
+        <div class="swatch-row"><span class="swatch-label">radius-sm</span><span class="swatch-hex">4px</span></div>
+        <div class="swatch-row"><span class="swatch-label">radius-md</span><span class="swatch-hex">8px</span></div>
+        <div class="swatch-row"><span class="swatch-label">radius-lg</span><span class="swatch-hex">12px</span></div>
+        <div class="swatch-row"><span class="swatch-label">radius-xl</span><span class="swatch-hex">16px</span></div>
+        <div class="swatch-row"><span class="swatch-label">pill</span><span class="swatch-hex">999px</span></div>
+      </div>
+    </div>
+  </section>
+
+  <footer style="margin-top:80px;padding-top:32px;border-top:1px solid var(--border);color:var(--text-3);font-family:var(--font-num);font-size:11px;letter-spacing:0.06em;text-transform:uppercase">
+    TradeGuardX · Visual redesign v2 · Build what earns its place.
+  </footer>
+
+</main>
+</body>
+</html>
